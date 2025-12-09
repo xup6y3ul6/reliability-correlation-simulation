@@ -1,0 +1,878 @@
+---
+title: "Recheck the correlation approach for ICC estimation"
+author: "Tzu-Yao Lin"
+date: last-modified
+execute:
+  eval: true
+  warning: false
+  cache: false
+format: 
+  html:
+    toc: true
+    toc-depth: 3
+    number-sections: true
+    self-contained: true
+    code-fold: false
+    code-tools: true
+---
+
+# Setup
+
+Load necessary packages.
+
+```{r}
+#| label: setup
+ 
+library(tidyverse)
+theme_set(theme_bw() + 
+          theme(aspect.ratio = 1))
+library(furrr)
+plan(multisession, workers = 8)
+library(irr)
+library(psych)
+
+set.seed(20251201)
+```
+
+Load a demo dataset from Sophie's course. The following dataset comes from @bland1999. The researchers were interested in studying the reliability of systolic blood pressure measurements (mmHg) taken manually (i.e., by a human) and by a semi-automatic machine. The systolic blood pressure was recorded manually by two raters (J and R) and by the semi-automatic machine (S) at three consecutive occasions on 85 subjects. The 85 subjects were randomly taken in the general population.
+
+-   item: subject ID
+-   X1_J: first measurement taken by rater J
+-   X2_J: second measurement taken by rater J
+-   X3_J: third measurement taken by rater J
+
+Then, the same variables are recorded for rater R (X1_R, X2_R, X3_R) and for the semi-automatic machine (X1_S, X2_S, X3_S)
+
+```{r}
+#| label: load-data
+
+load("data/sbp.wide.rda")
+skimr::skim(sbp.wide)
+```
+
+# Recheck the correlation approach
+
+## Case 1: One-way ANOVA (Classcial Test Theory)
+
+Subject: $i = 1, \dots, N$, Raters: $j = 1, \dots, M$ which are nested within subjects.
+
+$$
+  Y_{(j)i} = T_i + E_{(j)i} = \mu + S_i + E_{(j)i}
+$$
+
+where
+
+-   $T_i = E_{J}[Y_{(j)i}] = \mu + S_i \sim N(0, \sigma_S^2)$
+-   $E_{(j)i} \sim N(0, \sigma_E^2)$
+
+### A simple example
+
+Let me generate a simulated data
+
+```{r}
+#| label: case1-demo-setting
+
+N <- 1000
+M <- 50
+mu <- 1
+sigma_S <- 3
+sigma_E <- 5
+
+gen_one_way_anova <- function(N, M, mu, sigma_S, sigma_E){
+  S <- outer(rnorm(N, 0, sigma_S), rep(1, M))
+  E <- matrix(rnorm(N * M, 0, sigma_E), nrow = N)
+  Y <- mu + S + E
+
+  return(Y)
+}
+
+Y <- gen_one_way_anova(N, M, mu, sigma_S, sigma_E)
+Y[1:5, 1:5] |> round(2)
+```
+
+**Population reliability:**
+
+ICC(1):
+
+$$
+\begin{split}
+  \rho_{YY'} 
+    &= Cor(y_{ij}, y_{ij'}) \\
+    &= \frac{\sigma_S^2}{\sigma_S^2 + \sigma_E^2} \\
+    &= ICC(1) 
+\end{split}
+$$
+
+ICC(k):
+
+$$
+\begin{split}
+  \rho_{\bar{Y}\bar{Y}'} 
+    &= Cor(\bar{y}_{i\cdot}, \bar{y}_{i\cdot'}) \\
+    &=\frac{\sigma_S^2}{\sigma_S^2 + \sigma_E^2 / M} \\
+    &= ICC(k = M) 
+\end{split}
+$$
+
+```{r}
+#| label: case1-ICC
+
+ICC_1 <- sigma_S^2 / (sigma_S^2 + sigma_E^2)
+ICC_1
+ICC_k <- sigma_S^2 / (sigma_S^2 + sigma_E^2 / M)
+ICC_k
+```
+
+**Sample reliability (estimator):**
+
+1.  ICC-based estimates
+
+$$
+  ICC_s(1) = \frac{MSBS - MSWS}{MSBS + (M - 1) MSWS}
+$$
+
+$$
+  ICC_s(k) = \frac{MSBS - MSWS}{MSBS}
+$$
+
+It can be done by the `irr` package.
+
+```{r}
+#| label: case1-icc
+
+icc(Y, model = "oneway", unit = "single")
+icc(Y, model = "oneway", unit = "average")
+```
+
+2.  Cor-based estimates
+
+::: {.callout-note}
+For the full model detailed and the correlation procedure, please check the handwritten note.
+:::
+
+```{r}
+#| label: case1-cor-function
+
+icc1_cor <- function(Y, unit = c("single", "average"), rep_size = 1){
+  unit <- match.arg(unit)
+  N <- nrow(Y)
+  M <- ncol(Y)
+  
+  icc1 <- future_map_dbl(seq_len(rep_size), \(i) {
+    
+    if (unit == "single") {
+
+      selected_j1j2 <- replicate(N, sample(1:M, 2, replace = FALSE))
+      Y_j1 <- Y[cbind(1:N, selected_j1j2[1, ])]
+      Y_j2 <- Y[cbind(1:N, selected_j1j2[2, ])]
+      icc1 <- cor(Y_j1, Y_j2)
+
+    } else if (unit == "average") {
+
+      selected_j1s <- replicate(N, sample(1:M, M, replace = TRUE))
+      selected_j2s <- replicate(N, sample(1:M, M, replace = TRUE))
+      Y_j1s_matrix <- matrix(Y[cbind(rep(1:N, each = M), as.vector(selected_j1s))], nrow = N, byrow = TRUE)
+      Y_j2s_matrix <- matrix(Y[cbind(rep(1:N, each = M), as.vector(selected_j2s))], nrow = N, byrow = TRUE)
+      Y_j1s_mean <- rowMeans(Y_j1s_matrix, na.rm = TRUE)
+      Y_j2s_mean <- rowMeans(Y_j2s_matrix, na.rm = TRUE)
+      icc1 <- cor(Y_j1s_mean, Y_j2s_mean)
+
+    }
+  }, .options = furrr_options(seed = TRUE))
+
+  return(icc1)
+}
+```
+
+```{r}
+#| label: case1-icc-cor-single
+
+icc1_cor(Y, "single")
+```
+
+However, this calculation does not use all the data information because of the random sampling. Therfore, we can repeat this procedure many times to get the cor-based estimates and then take the average.
+
+```{r}
+#| label: case1-icc1-cor-average
+
+icc1_cor_rep <- icc1_cor(Y, "single", rep_size = 1000)
+mean(icc1_cor_rep)
+quantile(icc1_cor_rep, c(0.025, 0.975))
+
+# icc1_cor_rep <- icc1_cor(Y, "single", boot_size = 10000)
+# mean(icc1_cor_rep)
+# quantile(icc1_cor_rep, c(0.025, 0.975))
+```
+
+I'm not fully sure how to deal with the correlation for the average scores ...
+
+```{r}
+#| label: case1-icck-cor-average
+
+icc1_cor_rep <- icc1_cor(Y, "average", rep_size = 1000)
+mean(icc1_cor_rep)
+quantile(icc1_cor_rep, c(0.025, 0.975))
+
+
+# icc1_cor_rep <- icc1_cor(Y, "average", boot_size = 10000)
+# mean(icc1_cor_rep)
+# quantile(icc1_cor_rep, c(0.025, 0.975))
+```
+
+### Real data example
+
+Here, let's re-analyze the systolic blood pressure data for an example.
+
+```{r}
+#| label: case1-real-data
+ 
+sbp_S <- sbp.wide |> 
+  select(ends_with("_S")) |> 
+  as.matrix()
+
+icc(sbp_S, model = "oneway", unit = "single")
+icc(sbp_S, model = "oneway", unit = "average")
+
+icc1_cor_rep <- icc1_cor(sbp_S, "single", rep_size = 1000)
+mean(icc1_cor_rep)
+quantile(icc1_cor_rep, c(0.025, 0.975))
+
+icc1_cor_rep <- icc1_cor(sbp_S, "average", rep_size = 1000)
+mean(icc1_cor_rep)
+quantile(icc1_cor_rep, c(0.025, 0.975))
+```
+
+### Simulation 
+
+To give a more comprehensive comparison between the ICC-based and cor-based approaches, I conduct a simulation study under various conditions.
+
+```{r}
+#| label: case1-sim-function
+
+run_case1_sim <- function(N, M, mu, sigma_S, sigma_E) {
+  
+  # Generate the data for this single case
+  Y <- gen_one_way_anova(N, M, mu, sigma_S, sigma_E)
+  
+  # Run the analyses
+  icc_1_output <- icc(Y, model = "oneway", unit = "single")
+  icc_k_output <- icc(Y, model = "oneway", unit = "average")
+  cor_1_output <- icc1_cor(Y, unit = "single", rep_size = 1000)
+  cor_k_output <- icc1_cor(Y, unit = "average", rep_size = 1000)
+  
+  # Extract and summarize the results immediately
+  # Return a single tibble or list with only the essential results
+  tibble(
+    icc_1 = icc_1_output$value,
+    icc_1_l = icc_1_output$lbound,
+    icc_1_u = icc_1_output$ubound,
+    icc_k = icc_k_output$value,
+    icc_k_l = icc_k_output$lbound,
+    icc_k_u = icc_k_output$ubound,
+    cor_1 = mean(cor_1_output),
+    cor_1_l = quantile(cor_1_output, 0.025),
+    cor_1_u = quantile(cor_1_output, 0.975),
+    cor_k = mean(cor_k_output),
+    cor_k_l = quantile(cor_k_output, 0.025),
+    cor_k_u = quantile(cor_k_output, 0.975)
+  )
+}
+```
+
+```{r}
+#| label: case1-sim-settings
+#| eval: false
+
+N <- c(30, 100, 1000)
+M <- c(5, 30, 50)
+sigma_E <- c(1, 3, 5)
+sigma_SE_ratio <- c(0.5, 1, 2)
+
+case1_sim <- 
+  expand_grid(
+    N = N,
+    M = M,
+    sigma_E = sigma_E,
+    sigma_SE_ratio = sigma_SE_ratio
+  ) |>
+  mutate(
+    sigma_S = sigma_SE_ratio * sigma_E, 
+    ICC_1 = sigma_S^2 / (sigma_S^2 + sigma_E^2),
+    ICC_k = sigma_S^2 / (sigma_S^2 + sigma_E^2 / M), 
+    est_results = future_pmap(
+      list(N, M, mu = 1, sigma_S, sigma_E),
+      run_case1_sim, 
+      .options = furrr_options(seed = TRUE)
+    )
+  ) |> 
+  unnest(est_results)
+
+# write_rds(case1_sim, "data/case1_sim.rds")
+
+```
+
+```{r}
+#| label: load-case1-sim
+#| echo: false
+ 
+case1_sim <- read_rds("data/case1_sim.rds")
+```
+
+
+```{r}
+#| label: fig-case1-sim-icc1
+#| fig-cap: "Comparison between ICC(1) and cor-based estimates under various simulation conditions." 
+ 
+case1_sim |> 
+  select(N, M, sigma_E, sigma_SE_ratio, sigma_S, 
+         ICC_1, icc_1, icc_1_l, icc_1_u, cor_1, cor_1_l, cor_1_u) |> 
+  pivot_longer(cols = c(icc_1, cor_1), 
+               names_to = "method", 
+               values_to = "value") |>
+  ggplot(aes(x = factor(N), y = value, color = method)) +
+    geom_point(aes(shape = method), 
+               position = position_dodge(width = 0.5)) +
+    geom_errorbar(aes(ymin = ifelse(method == "icc_1", icc_1_l, cor_1_l),
+                      ymax = ifelse(method == "icc_1", icc_1_u, cor_1_u)),
+                  width = 0.2,
+                  position = position_dodge(width = 0.5)) +
+    geom_hline(aes(yintercept = ICC_1), linetype = "dashed") +
+    facet_grid(sigma_SE_ratio ~ M +sigma_E, 
+               scales = "free_y", 
+               labeller = label_bquote(rows = sigma[S]/sigma[E] == .(sigma_SE_ratio),
+                                       cols = atop(paste("M =", .(M)), 
+                                                   paste(sigma[E], "=", .(sigma_E))))) +
+    theme(legend.position = "bottom")
+```
+
+```{r}
+#| label: fig-case1-sim-icck
+#| fig-cap: "Comparison between ICC(k) and cor-based estimates under various simulation conditions." 
+ 
+case1_sim |> 
+  select(N, M, sigma_E, sigma_SE_ratio, sigma_S, 
+         ICC_k, icc_k, icc_k_l, icc_k_u, cor_k, cor_k_l, cor_k_u) |> 
+  pivot_longer(cols = c(icc_k, cor_k), 
+               names_to = "method", 
+               values_to = "value") |>
+  ggplot(aes(x = factor(N), y = value, color = method)) +
+    geom_point(aes(shape = method), 
+               position = position_dodge(width = 0.5)) +
+    geom_errorbar(aes(ymin = ifelse(method == "icc_k", icc_k_l, cor_k_l),
+                      ymax = ifelse(method == "icc_k", icc_k_u, cor_k_u)),
+                  width = 0.2,
+                  position = position_dodge(width = 0.5)) +
+    geom_hline(aes(yintercept = ICC_k), linetype = "dashed") +
+    facet_grid(sigma_SE_ratio ~ M +sigma_E, 
+               scales = "free_y", 
+               labeller = label_bquote(rows = sigma[S]/sigma[E] == .(sigma_SE_ratio),
+                                       cols = atop(paste("M =", .(M)), 
+                                                   paste(sigma[E], "=", .(sigma_E))))) +
+    theme(legend.position = "bottom")
+  
+```
+
+
+It looks pretty fine for ICC(1). However, for ICC(k), the cor-based approach seems to slightly overestimate the true reliability when the number of raters is small.
+
+I'm not sure why this happens ... Maybe the simulation procedure is not appropriate for the average scores?
+
+
+## Case 2: Two-way random effect ANOVA
+
+Subject: $i = 1, \dots, N$, Raters: $j = 1, \dots, M$. Subjects and raters are crossed with each other.
+
+$$
+  Y_{ij} = \mu + S_i + R_j + (SR_{ij} + E_{ij}^*) = \mu + S_i + R_j + E_{ij}
+$$
+
+where
+
+-   $S_i \sim N(0, \sigma_S^2)$
+-   $R_j \sim N(0, \sigma_R^2)$
+-   $E_{(j)i} \sim N(0, \sigma_E^2)$
+
+### A simple example
+
+Let me generate a simulated data, agian.
+
+```{r}
+#| label: case2-demo-setting
+ 
+N <- 1000
+M <- 50
+mu <- 1
+sigma_S <- 2
+sigma_R <- 6
+sigma_E <- 3
+
+gen_two_way_random_anova <- function(N, M, mu, sigma_S, sigma_R, sigma_E){
+  S <- outer(rnorm(N, 0, sigma_S), rep(1, M))
+  R <- outer(rep(1, N), rnorm(M, 0, sigma_R))
+  E <- matrix(rnorm(N * M, 0, sigma_E), nrow = N)
+  Y <- mu + S + R + E
+
+  return(Y)
+}
+
+Y <- gen_two_way_random_anova(N, M, mu, sigma_S, sigma_R, sigma_E)
+Y[1:5, 1:5] |> round(2)
+```
+
+**Population reliaiblity:**
+
+ICC(A, 1) and ICC(A, k) 
+$$
+\begin{split}
+  \rho_{YY'} 
+    &= Cor(y_{ij}, y_{ij'}) \\
+    &= \frac{\sigma_S^2}{\sigma_S^2 + \sigma_R^2 +\sigma_E^2} \\
+    &= ICC(A, 1)
+\end{split}
+$$
+
+$$
+\begin{split}
+  \rho_{\bar{Y}\bar{Y}'} 
+    &= Cor(\bar{y}_{i\cdot}, y_{\bar{i}_\cdot'}) \\
+    &= \frac{\sigma_S^2}{\sigma_S^2 + \sigma_R^2 / M +\sigma_E^2 / M} \\
+    &= ICC(A, k=M)
+\end{split}
+$$
+
+ICC(C, 1) and ICC(C, k)
+
+$$
+\begin{split}
+Cor(y_{ij}, y_{ij'} \mid j, j')
+    &= \frac{\sigma_S^2}{\sigma_S^2 + \sigma_E^2} \\
+    &= ICC(C, 1)
+\end{split}
+$$
+
+$$
+\begin{split}
+Cor(\bar{y}_{i\cdot}, \bar{y}_{i\cdot'} \mid \forall j, \forall j') 
+    &= \frac{\sigma_S^2}{\sigma_S^2 + \sigma_E^2 / M} \\
+    &= ICC(C, k = M)
+\end{split}
+$$
+
+```{r}
+#| label: case2-ICC
+ 
+ICC_A1 <- sigma_S^2 / (sigma_S^2 + sigma_R^2 + sigma_E^2)
+ICC_A1
+ICC_Ak <- sigma_S^2 / (sigma_S^2 + sigma_R^2 / M + sigma_E^2 / M)
+ICC_Ak
+
+ICC_C1 <- sigma_S^2 / (sigma_S^2 + sigma_E^2)
+ICC_C1
+ICC_Ck <- sigma_S^2 / (sigma_S^2 + sigma_E^2 / M)
+ICC_Ck
+```
+
+**Sample reliability (estimator):**
+
+1. ICC-based estimates
+
+$$
+ICC(A, 1) = \frac{MSBS - MSE}{MSBS + (M-1)MSE + M(MSBM - MSE)/N}
+$$
+
+$$
+ICC(A, k) = \frac{MSBS - MSE}{MSBS + M(MSBM - MSE)/N}
+$$
+
+
+$$
+ICC(C, 1) = \frac{MSBS - MSE}{MSBS + (M-1)MSE}
+$$
+
+
+$$
+ICC(C, k) - \frac{MSBS - MSE}{MSBS}
+$$
+
+```{r}
+#| label: case2-icc
+ 
+icc(Y, model = "twoway", type = "agreement", unit = "single")
+icc(Y, model = "twoway", type = "agreement", unit = "average")
+icc(Y, model = "twoway", type = "consistency", unit = "single")
+icc(Y, model = "twoway", type = "consistency", unit = "average")
+```
+
+2. Cor-based estimates
+
+::: {.callout-note}
+Check the handwritten note.
+:::
+
+```{r}
+#| label: case2-cor-function
+ 
+icc2_cor <- function(Y, 
+                     type = c("agreement", "consistency"), 
+                     unit = c("single", "average"), 
+                     rep_size = 1){
+    type <- match.arg(type)
+    unit <- match.arg(unit)
+    N <- nrow(Y)
+    M <- ncol(Y)
+
+    icc2 <- future_map_dbl(seq_len(rep_size), \(i) {
+    
+    if (type == "agreement") {
+      if (unit == "single") { # ICC(A, 1)
+        
+        selected_j1j2 <- replicate(N, sample(1:M, 2, replace = FALSE))
+        Y_j1 <- Y[cbind(1:N, selected_j1j2[1, ])]
+        Y_j2 <- Y[cbind(1:N, selected_j1j2[2, ])]
+        icc2 <- cor(Y_j1, Y_j2)
+
+      } else if (unit == "average") { # ICC(A, k)
+
+        selected_j1s <- replicate(N, sample(1:M, M, replace = TRUE))
+        selected_j2s <- replicate(N, sample(1:M, M, replace = TRUE))
+        Y_j1s_matrix <- matrix(Y[cbind(rep(1:N, each = M), as.vector(selected_j1s))], nrow = N, byrow = TRUE)
+        Y_j2s_matrix <- matrix(Y[cbind(rep(1:N, each = M), as.vector(selected_j2s))], nrow = N, byrow = TRUE)
+        Y_j1s_mean <- rowMeans(Y_j1s_matrix, na.rm = TRUE)
+        Y_j2s_mean <- rowMeans(Y_j2s_matrix, na.rm = TRUE)
+        icc2 <- cor(Y_j1s_mean, Y_j2s_mean)
+
+      }
+    } else if (type == "consistency") { # ICC(C, 1)
+        if (unit == "single") {
+        
+        selected_j1j2 <- sample(1:M, 2, replace = FALSE)
+        Y_j1 <- Y[cbind(1:N, selected_j1j2[1])]
+        Y_j2 <- Y[cbind(1:N, selected_j1j2[2])]
+        icc2 <- cor(Y_j1, Y_j2)
+
+      } else if (unit == "average") { # ICC(C, k)
+
+        selected_j1s <- sample(1:M, M, replace = TRUE)
+        selected_j2s <- sample(1:M, M, replace = TRUE)
+        Y_j1s_matrix <- matrix(Y[cbind(rep(1:N, each = M), selected_j1s)], nrow = N, byrow = TRUE)
+        Y_j2s_matrix <- matrix(Y[cbind(rep(1:N, each = M), selected_j2s)], nrow = N, byrow = TRUE)
+        Y_j1s_mean <- rowMeans(Y_j1s_matrix, na.rm = TRUE)
+        Y_j2s_mean <- rowMeans(Y_j2s_matrix, na.rm = TRUE)
+        icc2 <- cor(Y_j1s_mean, Y_j2s_mean)
+
+      }
+    }
+  }, .options = furrr_options(seed = TRUE))
+
+  return(icc2)
+}
+
+```
+
+```{r}
+#| label: case2-icc2_A-cor-average
+ 
+icc2_cor_rep <- icc2_cor(Y, type = "agreement", unit = "single", rep_size =1000)
+mean(icc2_cor_rep)
+quantile(icc2_cor_rep, c(0.025, 0.975))
+icc2_cor_rep <- icc2_cor(Y, type = "agreement", unit = "average", rep_size = 1000)
+mean(icc2_cor_rep)
+quantile(icc2_cor_rep, c(0.025, 0.975))
+```
+
+```{r}
+#| label: case2-icc2_C-cor-average
+ 
+icc2_cor_rep <- icc2_cor(Y, type = "consistency", unit = "single", rep_size =1000)
+mean(icc2_cor_rep)
+quantile(icc2_cor_rep, c(0.025, 0.975))
+icc2_cor_rep <- icc2_cor(Y, type = "consistency", unit = "average", rep_size = 1000)
+mean(icc2_cor_rep)
+quantile(icc2_cor_rep, c(0.025, 0.975))
+```
+
+### Real data example
+
+```{r}
+#| label: case2-real-data
+ 
+icc(sbp_S, model = "twoway", type = "agreement", unit = "single")
+icc(sbp_S, model = "twoway", type = "agreement", unit = "average")
+icc(sbp_S, model = "twoway", type = "consistency", unit = "single")
+icc(sbp_S, model = "twoway", type = "consistency", unit = "average")
+
+icc2_cor_rep <- icc2_cor(sbp_S, type = "agreement", unit = "single", rep_size =1000)
+mean(icc2_cor_rep)
+quantile(icc2_cor_rep, c(0.025, 0.975))
+icc2_cor_rep <- icc2_cor(sbp_S, type = "agreement", unit = "average", rep_size = 1000)
+mean(icc2_cor_rep)
+quantile(icc2_cor_rep, c(0.025, 0.975))
+icc2_cor_rep <- icc2_cor(sbp_S, type = "consistency", unit = "single", rep_size =1000)
+mean(icc2_cor_rep)
+quantile(icc2_cor_rep, c(0.025, 0.975))
+icc2_cor_rep <- icc2_cor(sbp_S, type = "consistency", unit = "average", rep_size = 1000)
+mean(icc2_cor_rep)
+quantile(icc2_cor_rep, c(0.025, 0.975))
+```
+
+There is no much difference between
+
+
+### Simulation comparison
+
+```{r}
+#| label: case2-sim-function
+ 
+run_case2_sim <- function(N, M, mu, sigma_S, sigma_R, sigma_E) {
+  
+  # Generate the data for this single case
+  Y <- gen_two_way_random_anova(N, M, mu, sigma_S, sigma_R, sigma_E)
+  
+  # Run the analyses
+  icc_A1_output <- icc(Y, model = "twoway", type = "agreement", unit = "single") 
+  icc_Ak_output <- icc(Y, model = "twoway", type = "agreement", unit = "average")
+  icc_C1_output <- icc(Y, model = "twoway", type = "consistency", unit = "single")
+  icc_Ck_output <- icc(Y, model = "twoway", type = "consistency", unit = "average")
+  cor_A1_output <- icc2_cor(Y, type = "agreement", unit = "single", rep_size = 1000)
+  cor_Ak_output <- icc2_cor(Y, type = "agreement", unit = "average", rep_size = 1000)
+  cor_C1_output <- icc2_cor(Y, type = "consistency", unit = "single", rep_size = 1000)
+  cor_Ck_output <- icc2_cor(Y, type = "consistency", unit = "average", rep_size = 1000)
+
+
+  # Extract and summarize the results immediately
+  # Return a single tibble or list with only the essential results
+  tibble(
+    icc_A1 = icc_A1_output$value,
+    icc_A1_l = icc_A1_output$lbound,
+    icc_A1_u = icc_A1_output$ubound,
+    icc_Ak = icc_Ak_output$value,
+    icc_Ak_l = icc_Ak_output$lbound,
+    icc_Ak_u = icc_Ak_output$ubound,
+    icc_C1 = icc_C1_output$value,
+    icc_C1_l = icc_C1_output$lbound,
+    icc_C1_u = icc_C1_output$ubound,
+    icc_Ck = icc_Ck_output$value,
+    icc_Ck_l = icc_Ck_output$lbound,
+    icc_Ck_u = icc_Ck_output$ubound,
+    cor_A1 = mean(cor_A1_output),
+    cor_A1_l = quantile(cor_A1_output, 0.025),
+    cor_A1_u = quantile(cor_A1_output, 0.975),
+    cor_Ak = mean(cor_Ak_output),
+    cor_Ak_l = quantile(cor_Ak_output, 0.025),
+    cor_Ak_u = quantile(cor_Ak_output, 0.975),
+    cor_C1 = mean(cor_C1_output),
+    cor_C1_l = quantile(cor_C1_output, 0.025),
+    cor_C1_u = quantile(cor_C1_output, 0.975),
+    cor_Ck = mean(cor_Ck_output),
+    cor_Ck_l = quantile(cor_Ck_output, 0.025),
+    cor_Ck_u = quantile(cor_Ck_output, 0.975)
+  )
+}
+```
+
+```{r}
+#| label: case2-sim-settings
+#| eval: false
+
+N <- c(30, 100, 1000)
+M <- c(5, 30, 50)
+sigma_E <- c(1, 3, 5)
+sigma_SE_ratio <- c(0.5, 1, 2)
+sigma_RE_ratio <- c(0.5, 1, 2)
+
+case2_sim <- 
+  expand_grid(
+    N = N,
+    M = M,
+    sigma_E = sigma_E,
+    sigma_SE_ratio = sigma_SE_ratio,
+    sigma_RE_ratio = sigma_RE_ratio
+  ) |>
+  mutate(
+    sigma_S = sigma_SE_ratio * sigma_E, 
+    sigma_R = sigma_RE_ratio * sigma_E,
+    ICC_A1 = sigma_S^2 / (sigma_S^2 + sigma_R^2 + sigma_E^2),
+    ICC_Ak = sigma_S^2 / (sigma_S^2 + sigma_R^2 / M + sigma_E^2 / M),
+    ICC_C1 = sigma_S^2 / (sigma_S^2 + sigma_E^2),
+    ICC_Ck = sigma_S^2 / (sigma_S^2 + sigma_E^2 / M), 
+    est_results = future_pmap(
+      list(N, M, mu = 1, sigma_S, sigma_R, sigma_E),
+      run_case2_sim, 
+      .options = furrr_options(seed = TRUE)
+    )
+  ) |> 
+  unnest(est_results)
+
+# write_rds(case2_sim, "data/case2_sim.rds")
+```
+
+```{r}
+#| label: load-case2-sim
+#| echo: false
+ 
+case2_sim <- read_rds("data/case2_sim.rds")
+```
+
+```{r}
+#| label: fig-case2-sim-iccA1
+#| fig-cap: "Comparison between ICC(A, 1) and cor-based estimates under various simulation conditions." 
+ 
+case2_sim |> 
+  filter(sigma_E == 5) |> 
+  select(N, M, sigma_E, sigma_SE_ratio, sigma_RE_ratio, 
+         ICC_A1, icc_A1, icc_A1_l, icc_A1_u, cor_A1, cor_A1_l, cor_A1_u) |> 
+  pivot_longer(cols = c(icc_A1, cor_A1), 
+               names_to = "method", 
+               values_to = "value") |>
+  ggplot(aes(x = factor(N), y = value, color = method)) +
+    geom_point(aes(shape = method), 
+               position = position_dodge(width = 0.5)) +
+    geom_errorbar(aes(ymin = ifelse(method == "icc_A1", icc_A1_l, cor_A1_l),
+                      ymax = ifelse(method == "icc_A1", icc_A1_u, cor_A1_u)),
+                  width = 0.2,
+                  position = position_dodge(width = 0.5)) +
+    geom_hline(aes(yintercept = ICC_A1), linetype = "dashed") +
+    facet_grid(sigma_SE_ratio ~ M +sigma_RE_ratio, 
+               scales = "free_y", 
+               labeller = label_bquote(rows = sigma[S]/sigma[E] == .(sigma_SE_ratio),
+                                       cols = atop(paste("M =", .(M)), 
+                                                   paste(sigma[R]/sigma[E], "=", .(sigma_RE_ratio))))) +
+    theme(legend.position = "bottom")
+```
+
+
+::: {.callout-warning}
+There is a noticeable difference between icc-based and cor-based estimates, especially when $\sigma_R / \sigma_E$ is large.
+:::
+
+
+```{r}
+#| label: fig-case2-sim-iccC1
+#| fig-cap: "Comparison between ICC(C, 1) and cor-based estimates under various simulation conditions."
+ 
+case2_sim |> 
+  filter(sigma_E == 5) |> 
+  select(N, M, sigma_E, sigma_SE_ratio, sigma_RE_ratio, 
+         ICC_C1, icc_C1, icc_C1_l, icc_C1_u, cor_C1, cor_C1_l, cor_C1_u) |> 
+  pivot_longer(cols = c(icc_C1, cor_C1), 
+               names_to = "method", 
+               values_to = "value") |>
+  ggplot(aes(x = factor(N), y = value, color = method)) +
+    geom_point(aes(shape = method), 
+               position = position_dodge(width = 0.5)) +
+    geom_errorbar(aes(ymin = ifelse(method == "icc_C1", icc_C1_l, cor_C1_l),
+                      ymax = ifelse(method == "icc_C1", icc_C1_u, cor_C1_u)),
+                  width = 0.2,
+                  position = position_dodge(width = 0.5)) +
+    geom_hline(aes(yintercept = ICC_C1), linetype = "dashed") +
+    facet_grid(sigma_SE_ratio ~ M +sigma_RE_ratio, 
+               scales = "free_y", 
+               labeller = label_bquote(rows = sigma[S]/sigma[E] == .(sigma_SE_ratio),
+                                       cols = atop(paste("M =", .(M)), 
+                                                   paste(sigma[R]/sigma[E], "=", .(sigma_RE_ratio))))) +
+    theme(legend.position = "bottom")
+```
+
+```{r}
+#| label: fig-case2-sim-iccAk
+#| fig-cap: "Comparison between ICC(A, k) and cor-based estimates under various simulation conditions."
+ 
+case2_sim |> 
+  filter(sigma_E == 5) |> 
+  select(N, M, sigma_E, sigma_SE_ratio, sigma_RE_ratio, 
+         ICC_Ak, icc_Ak, icc_Ak_l, icc_Ak_u, cor_Ak, cor_Ak_l, cor_Ak_u) |> 
+  pivot_longer(cols = c(icc_Ak, cor_Ak), 
+               names_to = "method", 
+               values_to = "value") |>
+  ggplot(aes(x = factor(N), y = value, color = method)) +
+    geom_point(aes(shape = method), 
+               position = position_dodge(width = 0.5)) +
+    geom_errorbar(aes(ymin = ifelse(method == "icc_Ak", icc_Ak_l, cor_Ak_l),
+                      ymax = ifelse(method == "icc_Ak", icc_Ak_u, cor_Ak_u)),
+                  width = 0.2,
+                  position = position_dodge(width = 0.5)) +
+    geom_hline(aes(yintercept = ICC_Ak), linetype = "dashed") +
+    facet_grid(sigma_SE_ratio ~ M +sigma_RE_ratio, 
+               scales = "free_y", 
+               labeller = label_bquote(rows = sigma[S]/sigma[E] == .(sigma_SE_ratio),
+                                       cols = atop(paste("M =", .(M)), 
+                                                   paste(sigma[R]/sigma[E], "=", .(sigma_RE_ratio))))) +
+    theme(legend.position = "bottom")
+```
+
+```{r}
+#| label: fig-case2-sim-iccCk
+#| fig-cap: "Comparison between ICC(C, k) and cor-based estimates under various simulation conditions."
+ 
+case2_sim |> 
+  filter(sigma_E == 5) |> 
+  select(N, M, sigma_E, sigma_SE_ratio, sigma_RE_ratio, 
+         ICC_Ck, icc_Ck, icc_Ck_l, icc_Ck_u, cor_Ck, cor_Ck_l, cor_Ck_u) |> 
+  pivot_longer(cols = c(icc_Ck, cor_Ck), 
+               names_to = "method", 
+               values_to = "value") |>
+  ggplot(aes(x = factor(N), y = value, color = method)) +
+    geom_point(aes(shape = method), 
+               position = position_dodge(width = 0.5)) +
+    geom_errorbar(aes(ymin = ifelse(method == "icc_Ck", icc_Ck_l, cor_Ck_l),
+                      ymax = ifelse(method == "icc_Ck", icc_Ck_u, cor_Ck_u)),
+                  width = 0.2,
+                  position = position_dodge(width = 0.5)) +
+    geom_hline(aes(yintercept = ICC_Ck), linetype = "dashed") +
+    facet_grid(sigma_SE_ratio ~ M +sigma_RE_ratio, 
+               scales = "free_y", 
+               labeller = label_bquote(rows = sigma[S]/sigma[E] == .(sigma_SE_ratio),
+                                       cols = atop(paste("M =", .(M)), 
+                                                   paste(sigma[R]/sigma[E], "=", .(sigma_RE_ratio))))) +
+    theme(legend.position = "bottom")
+```
+
+## Case 3: Two-way mixed effect ANOVA
+
+Subject: $i = 1, \dots, N$, Raters: $j = 1, \dots, M$. Subjects and raters are crossed with each other.
+
+$$
+  Y_{ij} = \mu + S_i + R_j + (SR_{ij} + E_{ij}^*) = \mu + S_i + R_j + E_{ij}
+$$
+
+where
+
+-   $S_i \sim N(0, \sigma_S^2)$
+-   $\sum\_{j=1}^M R_j = 0$ and $\theta_R^2 = \frac{\sum R_j^2}{M-1}\$: fixed effect
+-   $E_{(j)i} \sim N(0, \sigma_E^2)$
+
+### A simple example
+
+Let me generate a simulated data, agian.
+
+```{r}
+#| label: case3-demo-setting
+N <- 1000
+M <- 50
+mu <- 1
+sigma_S <- 4
+theta_R <- 9
+sigma_E <- 10
+
+
+gen_two_way_mixed_anova <- function(N, M, mu, sigma_S, sigma_E){
+  S <- outer(rnorm(N, 0, sigma_S), rep(1, M))
+  R <- outer(rep(1, N), MASS::mvrnorm(M, mu = 0, Sigma = theta_R^2, empirical = TRUE)[, 1])
+  E <- matrix(rnorm(N * M, 0, sigma_E), nrow = N)
+  Y <- mu + S + R + E
+
+  return(Y)
+}
+
+Y <- gen_two_way_mixed_anova(N, M, mu, sigma_S, sigma_E)
+head(Y)
+```
+
+Note that to generate the fixed effect for raters, I use the `MASS::mvrnorm` function with the `empirical = TRUE` option to ensure that the generated raters have the desired variance.
+
+...
+
+
+## Nested data
+
+To be continuoued ...
