@@ -31,7 +31,7 @@ plan(multisession, workers = 8)
 library(irr)
 library(psych)
 
-set.seed(20251201)
+set.seed(20251210)
 ```
 
 Load a demo dataset from Sophie's course. The following dataset comes from @bland1999. The researchers were interested in studying the reliability of systolic blood pressure measurements (mmHg) taken manually (i.e., by a human) and by a semi-automatic machine. The systolic blood pressure was recorded manually by two raters (J and R) and by the semi-automatic machine (S) at three consecutive occasions on 85 subjects. The 85 subjects were randomly taken in the general population.
@@ -153,19 +153,21 @@ For the full model detailed and the correlation procedure, please check the hand
 ```{r}
 #| label: case1-cor-function
 
-icc1_cor <- function(Y, unit = c("single", "average"), rep_size = 1){
+icc1_cor <- function(Y, 
+                     unit = c("single", "average"), 
+                     rep_size = 1,
+                     parallel = TRUE){
   unit <- match.arg(unit)
   N <- nrow(Y)
   M <- ncol(Y)
   
-  icc1 <- future_map_dbl(seq_len(rep_size), \(i) {
-    
+  get_icc1_cor <- function(i) {
     if (unit == "single") {
 
       selected_j1j2 <- replicate(N, sample(1:M, 2, replace = FALSE))
       Y_j1 <- Y[cbind(1:N, selected_j1j2[1, ])]
       Y_j2 <- Y[cbind(1:N, selected_j1j2[2, ])]
-      icc1 <- cor(Y_j1, Y_j2)
+      return(cor(Y_j1, Y_j2))
 
     } else if (unit == "average") {
 
@@ -175,10 +177,17 @@ icc1_cor <- function(Y, unit = c("single", "average"), rep_size = 1){
       Y_j2s_matrix <- matrix(Y[cbind(rep(1:N, each = M), as.vector(selected_j2s))], nrow = N, byrow = TRUE)
       Y_j1s_mean <- rowMeans(Y_j1s_matrix, na.rm = TRUE)
       Y_j2s_mean <- rowMeans(Y_j2s_matrix, na.rm = TRUE)
-      icc1 <- cor(Y_j1s_mean, Y_j2s_mean)
+      return(cor(Y_j1s_mean, Y_j2s_mean))
 
     }
-  }, .options = furrr_options(seed = TRUE))
+  }
+
+  if (parallel) {
+    icc1 <- future_map_dbl(seq_len(rep_size), get_icc1_cor, 
+                   .options = furrr_options(seed = TRUE))
+  } else {
+    icc1 <- map_dbl(seq_len(rep_size), get_icc1_cor)
+  }
 
   return(icc1)
 }
@@ -257,8 +266,8 @@ run_case1_sim <- function(N, M, mu, sigma_S, sigma_E) {
   # Run the analyses
   icc_1_output <- icc(Y, model = "oneway", unit = "single")
   icc_k_output <- icc(Y, model = "oneway", unit = "average")
-  cor_1_output <- icc1_cor(Y, unit = "single", rep_size = 1000)
-  cor_k_output <- icc1_cor(Y, unit = "average", rep_size = 1000)
+  cor_1_output <- icc1_cor(Y, unit = "single", rep_size = 1000, parallel = FALSE)
+  cor_k_output <- icc1_cor(Y, unit = "average", rep_size = 1000, parallel = FALSE)
   
   # Extract and summarize the results immediately
   # Return a single tibble or list with only the essential results
@@ -281,8 +290,8 @@ run_case1_sim <- function(N, M, mu, sigma_S, sigma_E) {
 
 ```{r}
 #| label: case1-sim-settings
-#| eval: false
-
+#| eval: true
+ 
 N <- c(30, 100, 1000)
 M <- c(5, 30, 50)
 sigma_E <- c(1, 3, 5)
@@ -301,13 +310,13 @@ case1_sim <-
     ICC_k = sigma_S^2 / (sigma_S^2 + sigma_E^2 / M), 
     est_results = future_pmap(
       list(N, M, mu = 1, sigma_S, sigma_E),
-      run_case1_sim, 
+      run_case1_sim,
       .options = furrr_options(seed = TRUE)
     )
   ) |> 
   unnest(est_results)
 
-# write_rds(case1_sim, "data/case1_sim.rds")
+write_rds(case1_sim, "data/case1_sim.rds")
 
 ```
 
@@ -349,7 +358,7 @@ case1_sim |>
 #| label: fig-case1-sim-icck
 #| fig-cap: "Comparison between ICC(k) and cor-based estimates under various simulation conditions." 
  
-case1_sim |> 
+case1_sim |>
   select(N, M, sigma_E, sigma_SE_ratio, sigma_S, 
          ICC_k, icc_k, icc_k_l, icc_k_u, cor_k, cor_k_l, cor_k_u) |> 
   pivot_longer(cols = c(icc_k, cor_k), 
@@ -390,7 +399,7 @@ where
 
 -   $S_i \sim N(0, \sigma_S^2)$
 -   $R_j \sim N(0, \sigma_R^2)$
--   $E_{(j)i} \sim N(0, \sigma_E^2)$
+-   $E_{ij} \sim N(0, \sigma_E^2)$
 
 ### A simple example
 
@@ -515,21 +524,21 @@ Check the handwritten note.
 icc2_cor <- function(Y, 
                      type = c("agreement", "consistency"), 
                      unit = c("single", "average"), 
-                     rep_size = 1){
+                     rep_size = 1,
+                     parallel = TRUE){
     type <- match.arg(type)
     unit <- match.arg(unit)
     N <- nrow(Y)
     M <- ncol(Y)
 
-    icc2 <- future_map_dbl(seq_len(rep_size), \(i) {
-    
+    get_icc2_cor <- function(i) {
     if (type == "agreement") {
       if (unit == "single") { # ICC(A, 1)
         
         selected_j1j2 <- replicate(N, sample(1:M, 2, replace = FALSE))
         Y_j1 <- Y[cbind(1:N, selected_j1j2[1, ])]
         Y_j2 <- Y[cbind(1:N, selected_j1j2[2, ])]
-        icc2 <- cor(Y_j1, Y_j2)
+        return(cor(Y_j1, Y_j2))
 
       } else if (unit == "average") { # ICC(A, k)
 
@@ -539,7 +548,7 @@ icc2_cor <- function(Y,
         Y_j2s_matrix <- matrix(Y[cbind(rep(1:N, each = M), as.vector(selected_j2s))], nrow = N, byrow = TRUE)
         Y_j1s_mean <- rowMeans(Y_j1s_matrix, na.rm = TRUE)
         Y_j2s_mean <- rowMeans(Y_j2s_matrix, na.rm = TRUE)
-        icc2 <- cor(Y_j1s_mean, Y_j2s_mean)
+        return(cor(Y_j1s_mean, Y_j2s_mean))
 
       }
     } else if (type == "consistency") { # ICC(C, 1)
@@ -548,7 +557,7 @@ icc2_cor <- function(Y,
         selected_j1j2 <- sample(1:M, 2, replace = FALSE)
         Y_j1 <- Y[cbind(1:N, selected_j1j2[1])]
         Y_j2 <- Y[cbind(1:N, selected_j1j2[2])]
-        icc2 <- cor(Y_j1, Y_j2)
+        return(cor(Y_j1, Y_j2))
 
       } else if (unit == "average") { # ICC(C, k)
 
@@ -558,11 +567,18 @@ icc2_cor <- function(Y,
         Y_j2s_matrix <- matrix(Y[cbind(rep(1:N, each = M), selected_j2s)], nrow = N, byrow = TRUE)
         Y_j1s_mean <- rowMeans(Y_j1s_matrix, na.rm = TRUE)
         Y_j2s_mean <- rowMeans(Y_j2s_matrix, na.rm = TRUE)
-        icc2 <- cor(Y_j1s_mean, Y_j2s_mean)
+        return(cor(Y_j1s_mean, Y_j2s_mean))
 
       }
     }
-  }, .options = furrr_options(seed = TRUE))
+  }
+
+  if (parallel) {
+    icc2 <- future_map_dbl(seq_len(rep_size), get_icc2_cor, 
+                    .options = furrr_options(seed = TRUE))
+  } else {
+    icc2 <- map_dbl(seq_len(rep_size), get_icc2_cor)
+  }
 
   return(icc2)
 }
@@ -633,10 +649,10 @@ run_case2_sim <- function(N, M, mu, sigma_S, sigma_R, sigma_E) {
   icc_Ak_output <- icc(Y, model = "twoway", type = "agreement", unit = "average")
   icc_C1_output <- icc(Y, model = "twoway", type = "consistency", unit = "single")
   icc_Ck_output <- icc(Y, model = "twoway", type = "consistency", unit = "average")
-  cor_A1_output <- icc2_cor(Y, type = "agreement", unit = "single", rep_size = 1000)
-  cor_Ak_output <- icc2_cor(Y, type = "agreement", unit = "average", rep_size = 1000)
-  cor_C1_output <- icc2_cor(Y, type = "consistency", unit = "single", rep_size = 1000)
-  cor_Ck_output <- icc2_cor(Y, type = "consistency", unit = "average", rep_size = 1000)
+  cor_A1_output <- icc2_cor(Y, type = "agreement", unit = "single", rep_size = 1000, parallel = FALSE)
+  cor_Ak_output <- icc2_cor(Y, type = "agreement", unit = "average", rep_size = 1000, parallel = FALSE)
+  cor_C1_output <- icc2_cor(Y, type = "consistency", unit = "single", rep_size = 1000, parallel = FALSE)
+  cor_Ck_output <- icc2_cor(Y, type = "consistency", unit = "average", rep_size = 1000, parallel = FALSE)
 
 
   # Extract and summarize the results immediately
@@ -672,10 +688,11 @@ run_case2_sim <- function(N, M, mu, sigma_S, sigma_R, sigma_E) {
 
 ```{r}
 #| label: case2-sim-settings
-#| eval: false
+#| eval: true
 
 N <- c(30, 100, 1000)
 M <- c(5, 30, 50)
+
 sigma_E <- c(1, 3, 5)
 sigma_SE_ratio <- c(0.5, 1, 2)
 sigma_RE_ratio <- c(0.5, 1, 2)
@@ -703,7 +720,7 @@ case2_sim <-
   ) |> 
   unnest(est_results)
 
-# write_rds(case2_sim, "data/case2_sim.rds")
+write_rds(case2_sim, "data/case2_sim.rds")
 ```
 
 ```{r}
@@ -742,7 +759,7 @@ case2_sim |>
 
 
 ::: {.callout-warning}
-There is a noticeable difference between icc-based and cor-based estimates, especially when $\sigma_R / \sigma_E$ is large.
+There is a noticeable difference between icc-based and cor-based estimates, especially when $\sigma_R / \sigma_E$ is large, especially when $M$ is small.
 :::
 
 
