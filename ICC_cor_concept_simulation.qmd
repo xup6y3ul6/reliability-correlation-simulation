@@ -1,0 +1,1083 @@
+---
+title: "Recheck the correlation approach for ICC estimation"
+author: "Tzu-Yao Lin"
+date: last-modified
+execute:
+  eval: true
+  warning: false
+  cache: false
+format: 
+  html:
+    toc: true
+    toc-depth: 3
+    number-sections: true
+    self-contained: true
+    code-fold: false
+    code-tools: true
+---
+
+# Setup
+
+Load necessary packages.
+
+```{r}
+#| label: setup
+ 
+library(tidyverse)
+theme_set(theme_bw() + 
+          theme(aspect.ratio = 1))
+library(furrr)
+plan(multisession, workers = 8)
+library(irr)
+library(psych)
+
+set.seed(20251210)
+```
+
+
+
+
+
+# Recheck the correlation approach
+
+
+
+> A rigorous definition is adopted for the ICC, namely, that the ICC is the correlation between one measurement (either a single rating or a mean of several ratings) on a target and another measurement obtained on that target. The ICC is thus a bona fide correlation coefficient that, as is shown below, is of ten but not necessarily identical to the component of variance due to targets divided by the sum of it and other variance components. (@shrout1979)
+
+
+
+
+## Case 1: One-way ANOVA (Classcial Test Theory)
+
+Subject: $i = 1, \dots, N$, Raters: $j = 1, \dots, M$ which are nested within subjects.
+
+$$
+  Y_{(j)i} = T_i + E_{(j)i} = \mu + S_i + E_{(j)i}
+$$
+
+where
+
+-   $T_i = E_{J}[Y_{(j)i}] = \mu + S_i \sim N(0, \sigma_S^2)$
+-   $E_{(j)i} \sim N(0, \sigma_E^2)$
+
+
+
+
+```{r}
+
+oneway_icc <- function(pars, 
+                       unit = c("single", "average"),
+                       rep_size = 1000) {
+  if (is.null(pars$mu)) {mu <- 0} else {mu <- pars$mu}
+  if (is.null(pars$sigma_S)) {stop("sigma_S need to be specified")}
+  if (is.null(pars$sigma_E)) {stop("sigma_E need to be specified")}
+  if (is.null(pars$M)) {stop("M need to be specified")}
+  
+  sigma_S <- pars$sigma_S
+  sigma_E <- pars$sigma_E 
+  M <- pars$M
+  num_ave_R <- ifelse(unit == "single", 1, M)
+  
+  # 
+  y_ij1 <- vector("double", length = rep_size)
+  y_ij2 <- vector("double", length = rep_size)
+  
+  for (l in seq_len(rep_size)) {
+    S_i <- rnorm(1, 0, sigma_S)
+    E_ij1 <- rnorm(num_ave_R, 0, sigma_E)
+    E_ij2 <- rnorm(num_ave_R, 0, sigma_E)
+    y_ij1[l] <- mu + S_i + mean(E_ij1)
+    y_ij2[l] <- mu + S_i + mean(E_ij2)
+  }
+
+  return(cor(y_ij1, y_ij2))
+}
+
+twoway_random_icc <- function(pars,
+                              type = c("agreement", "consistency"),
+                              unit = c("single", "average"),
+                              rep_size = 1000) {
+
+  if (is.null(pars$mu)) {mu <- 0} else {mu <- pars$mu}
+  if (is.null(pars$sigma_S)) {stop("sigma_S need to be specified")}
+  if (is.null(pars$sigma_R)) {stop("sigma_R need to be specified")}
+  if (is.null(pars$sigma_E)) {stop("sigma_E need to be specified")}
+  if (is.null(pars$M)) {stop("M need to be specified")}
+  
+  sigma_S <- pars$sigma_S
+  sigma_E <- pars$sigma_E
+  sigma_R <- pars$sigma_R 
+  M <- pars$M
+  num_ave_R <- ifelse(unit == "single", 1, M)
+  
+  # 
+  y_ij1 <- vector("double", length = rep_size)
+  y_ij2 <- vector("double", length = rep_size)
+
+  if (type == "agreement") {
+    for (l in seq_len(rep_size)) {
+      S_i <- rnorm(1, 0, sigma_S)
+      R_j1 <- rnorm(num_ave_R, 0, sigma_R)
+      R_j2 <- rnorm(num_ave_R, 0, sigma_R)
+      E_ij1 <- rnorm(num_ave_R, 0, sigma_E)
+      E_ij2 <- rnorm(num_ave_R, 0, sigma_E)
+      y_ij1[l] <- mu + S_i + mean(R_j1) + mean(E_ij1)
+      y_ij2[l] <- mu + S_i + mean(R_j2) + mean(E_ij2)
+    }
+  } else if (type == "consistency") {
+    # rater effects are fixed across measurements
+    R_j1 <- rnorm(num_ave_R, 0, sigma_R)
+    R_j2 <- rnorm(num_ave_R, 0, sigma_R)
+    
+    # other random effects are independently generated
+    for (l in seq_len(rep_size)) {
+      S_i <- rnorm(1, 0, sigma_S)
+      E_ij1 <- rnorm(num_ave_R, 0, sigma_E)
+      E_ij2 <- rnorm(num_ave_R, 0, sigma_E)
+      y_ij1[l] <- mu + S_i + mean(R_j1) + mean(E_ij1)
+      y_ij2[l] <- mu + S_i + mean(R_j2) + mean(E_ij2)
+    }
+  }
+  
+  return(cor(y_ij1, y_ij2))
+}
+
+twoway_mixed_icc <- function(pars, 
+                             type = c("agreement", "consistency"),
+                             unit = c("single", "average"),
+                             rep_size = 1000) {
+  if (is.null(pars$mu)) {mu <- 0} else {mu <- pars$mu}
+  if (is.null(pars$sigma_S)) {stop("sigma_S need to be specified")}
+  if (is.null(pars$theta_R)) {stop("theta_R need to be specified")}
+  if (is.null(pars$sigma_E)) {stop("sigma_E need to be specified")}
+  if (is.null(pars$M)) {stop("M need to be specified")}
+  
+  sigma_S <- pars$sigma_S
+  theta_R <- pars$theta_R 
+  sigma_E <- pars$sigma_E
+  M <- pars$M
+  num_ave_R <- ifelse(unit == "single", 1, M)
+  
+  # 
+  y_ij1 <- vector("double", length = rep_size)
+  y_ij2 <- vector("double", length = rep_size)
+
+  # rater effects are fixed in all scenarios
+  R_j <- MASS::mvrnorm(M, 0, theta_R^2, empirical = TRUE) |> as.vector()
+  
+  if (type == "agreement") {
+    
+    for (l in seq_len(rep_size)) {
+      if (unit == "single") {
+        selected_R_j1j2 <- sample(M, 2, replace = FALSE)
+      } else {
+        selected_R_j1j2 <- 1:M # actually, everyone have the same group of raters, Ak == Ck
+      }
+      S_i <- rnorm(1, 0, sigma_S)
+      R_j1 <- R_j[selected_R_j1j2[1]]
+      R_j2 <- R_j[selected_R_j1j2[2]]
+      E_ij1 <- rnorm(num_ave_R, 0, sigma_E)
+      E_ij2 <- rnorm(num_ave_R, 0, sigma_E)
+      y_ij1[l] <- mu + S_i + mean(R_j1) + mean(E_ij1)
+      y_ij2[l] <- mu + S_i + mean(R_j2) + mean(E_ij2)
+    }
+  } else if (type == "consistency") {
+    # rater effects are fixed across measurements
+    if (unit == "single") {
+      selected_R_j1j2 <- sample(M, 2, replace = FALSE)
+    } else {
+      selected_R_j1j2 <- 1:M # actually, everyone have the same group of raters, Ak == Ck
+    }
+    
+    R_j1 <- R_j[selected_R_j1j2[1]]
+    R_j2 <- R_j[selected_R_j1j2[2]]
+    
+    # other random effects are independently generated
+    for (l in seq_len(rep_size)) {
+      S_i <- rnorm(1, 0, sigma_S)
+      E_ij1 <- rnorm(num_ave_R, 0, sigma_E)
+      E_ij2 <- rnorm(num_ave_R, 0, sigma_E)
+      y_ij1[l] <- mu + S_i + mean(R_j1) + mean(E_ij1)
+      y_ij2[l] <- mu + S_i + mean(R_j2) + mean(E_ij2)
+    }
+  }
+
+  return(cor(y_ij1, y_ij2))
+}
+
+threeway_nested_icc <- function(pars, 
+                                unit = c("single", "average"), 
+                                level = c("cluster", "subject"), 
+                                clus_score_form = c("manifest", "latent"),
+                                rep_size = 1000) {
+  if (is.null(pars$mu)) {mu <- 0} else {mu <- pars$mu}
+  if (is.null(pars$sigma_C)) {stop("sigma_C need to be specified")}
+  if (is.null(pars$sigma_S)) {stop("sigma_S need to be specified")}
+  if (is.null(pars$sigma_E)) {stop("sigma_E need to be specified")}
+  if (is.null(pars$N)) {stop("N (number of subjects) need to be specified")}
+  if (is.null(pars$M)) {stop("M (number of raters) need to be specified")}
+  
+  sigma_C <- pars$sigma_C
+  sigma_S <- pars$sigma_S
+  sigma_E <- pars$sigma_E
+  N <- pars$N
+  M <- pars$M
+  num_ave_S <- ifelse(unit == "single", 1, N)
+  num_ave_R <- ifelse(unit == "single", 1, M)
+  
+  # 
+  y_kij1 <- vector("double", length = rep_size)
+  y_kij2 <- vector("double", length = rep_size)
+
+  if (level == "subject") {
+    # condition on a specific cluster
+    C_k <- rnorm(1, 0, sigma_C)
+    
+    for (l in seq_len(rep_size)) {
+      S_ki <- rnorm(1, 0, sigma_S)
+      E_kij1 <- rnorm(num_ave_R, 0, sigma_E)
+      E_kij2 <- rnorm(num_ave_R, 0, sigma_E)
+      y_kij1[l] <- mu + C_k + S_ki + mean(E_kij1)
+      y_kij2[l] <- mu + C_k + S_ki + mean(E_kij2)
+    }
+
+  } else if (level == "cluster") {
+
+    if (clus_score_form == "manifest") {
+      
+      for (l in seq_len(rep_size)) {
+        C_k <- rnorm(1, 0, sigma_C)
+        S_ki1 <- rnorm(num_ave_S, 0, sigma_S)
+        S_ki2 <- rnorm(num_ave_S, 0, sigma_S)
+        E_kij1 <- rnorm(num_ave_S * num_ave_R, 0, sigma_E)
+        E_kij2 <- rnorm(num_ave_S * num_ave_R, 0, sigma_E)
+        y_kij1[l] <- mu + C_k + mean(S_ki1) + mean(E_kij1)
+        y_kij2[l] <- mu + C_k + mean(S_ki2) + mean(E_kij2)
+      }
+
+    } else if (clus_score_form == "latent") {
+
+      # condition on a specific subject (to remove its effect) as if this subject can show up in different clusters
+      S_ki <- rnorm(num_ave_S, 0, sigma_S)
+      
+      for (l in seq_len(rep_size)) {
+        C_k <- rnorm(1, 0, sigma_C)
+        E_kij1 <- rnorm(num_ave_S * num_ave_R, 0, sigma_E)
+        E_kij2 <- rnorm(num_ave_S * num_ave_R, 0, sigma_E)
+        y_kij1[l] <- mu + C_k + mean(S_ki) + mean(E_kij1)
+        y_kij2[l] <- mu + C_k + mean(S_ki) + mean(E_kij2)
+      }
+
+    }
+  }
+
+  return(cor(y_kij1, y_kij2))
+}
+
+threeway_nestcrossed_icc <- function(pars, 
+                                     type = c("absolute", "consistency"),
+                                     unit = c("single", "average"), 
+                                     level = c("cluster", "subject"), 
+                                     clus_score_form = c("manifest", "latent"),
+                                     rep_size = 1000) {
+  if (is.null(pars$mu)) {mu <- 0} else {mu <- pars$mu}
+  if (is.null(pars$sigma_C)) {stop("sigma_C need to be specified")}
+  if (is.null(pars$sigma_S)) {stop("sigma_S need to be specified")}
+  if (is.null(pars$sigma_R)) {stop("sigma_R need to be specified")}
+  if (is.null(pars$sigma_CR)) {stop("sigma_CR need to be specified")}
+  if (is.null(pars$sigma_E)) {stop("sigma_E need to be specified")}
+  if (is.null(pars$N)) {stop("N (number of subjects) need to be specified")}
+  if (is.null(pars$M)) {stop("M (number of raters) need to be specified")}
+  
+  sigma_C <- pars$sigma_C
+  sigma_S <- pars$sigma_S
+  sigma_R <- pars$sigma_R
+  sigma_CR <- pars$sigma_CR
+  sigma_E <- pars$sigma_E
+  N <- pars$N
+  M <- pars$M
+  num_ave_S <- ifelse(unit == "single", 1, N)
+  num_ave_R <- ifelse(unit == "single", 1, M)
+  
+  # 
+  y_kij1 <- vector("double", length = rep_size)
+  y_kij2 <- vector("double", length = rep_size)
+
+  if (level == "subject") {
+    # condition on a specific cluster
+    C_k <- rnorm(1, 0, sigma_C)
+
+    if (type == "agreement") {
+      
+      for (l in seq_len(rep_size)) {
+        S_ki <- rnorm(1, 0, sigma_S)
+        R_j1 <- rnorm(num_ave_R, 0, sigma_R)
+        R_j2 <- rnorm(num_ave_R, 0, sigma_R)
+        CR_kj1 <- rnorm(num_ave_R, 0, sigma_CR)
+        CR_kj2 <- rnorm(num_ave_R, 0, sigma_CR)
+        E_kij1 <- rnorm(num_ave_R, 0, sigma_E)
+        E_kij2 <- rnorm(num_ave_R, 0, sigma_E)
+        y_kij1[l] <- mu + C_k + S_ki + mean(R_j1) + mean(CR_kj1) + mean(E_kij1)
+        y_kij2[l] <- mu + C_k + S_ki + mean(R_j2) + mean(CR_kj2) + mean(E_kij2)
+      }
+
+    } else if (type == "consistency") {
+      # rater-related effects are fixed across measurements
+      R_j1 <- rnorm(num_ave_R, 0, sigma_R)
+      R_j2 <- rnorm(num_ave_R, 0, sigma_R)
+      CR_kj1 <- rnorm(num_ave_R, 0, sigma_CR)
+      CR_kj2 <- rnorm(num_ave_R, 0, sigma_CR)
+      
+      for (l in seq_len(rep_size)) {
+        S_ki <- rnorm(1, 0, sigma_S)
+        E_kij1 <- rnorm(num_ave_R, 0, sigma_E)
+        E_kij2 <- rnorm(num_ave_R, 0, sigma_E)
+        y_kij1[l] <- mu + C_k + S_ki + mean(R_j1) + mean(CR_kj1) + mean(E_kij1)
+        y_kij2[l] <- mu + C_k + S_ki + mean(R_j2) + mean(CR_kj2) + mean(E_kij2)
+      }
+    }
+    
+
+  } else if (level == "cluster") {
+
+    if (clus_score_form == "manifest") {
+      
+      if (type == "agreement") {
+
+        for (l in seq_len(rep_size)) {
+          C_k <- rnorm(1, 0, sigma_C)
+          S_ki1 <- rnorm(num_ave_S, 0, sigma_S)
+          S_ki2 <- rnorm(num_ave_S, 0, sigma_S)
+          R_j1 <- rnorm(num_ave_R, 0, sigma_R)
+          R_j2 <- rnorm(num_ave_R, 0, sigma_R)
+          CR_kj1 <- rnorm(num_ave_R, 0, sigma_CR)
+          CR_kj2 <- rnorm(num_ave_R, 0, sigma_CR)
+          E_kij1 <- rnorm(num_ave_S * num_ave_R, 0, sigma_E)
+          E_kij2 <- rnorm(num_ave_S * num_ave_R, 0, sigma_E)
+          y_kij1[l] <- mu + C_k + mean(S_ki1) + mean(R_j1) + mean(CR_kj1) + mean(E_kij1)
+          y_kij2[l] <- mu + C_k + mean(S_ki2) + mean(R_j2) + mean(CR_kj2) + mean(E_kij2)
+        }
+
+      } else if (type == "consistency") {
+        # rater-related effects are fixed across measurements
+        R_j1 <- rnorm(num_ave_R, 0, sigma_R)
+        R_j2 <- rnorm(num_ave_R, 0, sigma_R)
+
+        for (l in seq_len(rep_size)) {
+          C_k <- rnorm(1, 0, sigma_C)
+          S_ki1 <- rnorm(num_ave_S, 0, sigma_S)
+          S_ki2 <- rnorm(num_ave_S, 0, sigma_S)
+          CR_kj1 <- rnorm(num_ave_R, 0, sigma_CR) # C is still random -> CR random
+          CR_kj2 <- rnorm(num_ave_R, 0, sigma_CR)
+          E_kij1 <- rnorm(num_ave_S * num_ave_R, 0, sigma_E)
+          E_kij2 <- rnorm(num_ave_S * num_ave_R, 0, sigma_E)
+          y_kij1[l] <- mu + C_k + mean(S_ki1) + mean(R_j1) + mean(CR_kj1) + mean(E_kij1)
+          y_kij2[l] <- mu + C_k + mean(S_ki2) + mean(R_j2) + mean(CR_kj2) + mean(E_kij2)
+        }
+
+      }
+
+    } else if (clus_score_form == "latent") {
+      # condition on a specific subject (to remove its effect) as if this subject can show up in different clusters
+      S_ki <- rnorm(num_ave_S, 0, sigma_S)
+      
+      if (type == "agreement") {
+
+        for (l in seq_len(rep_size)) {
+          C_k <- rnorm(1, 0, sigma_C)
+          R_j1 <- rnorm(num_ave_R, 0, sigma_R)
+          R_j2 <- rnorm(num_ave_R, 0, sigma_R)
+          CR_kj1 <- rnorm(num_ave_R, 0, sigma_CR)
+          CR_kj2 <- rnorm(num_ave_R, 0, sigma_CR)
+          E_kij1 <- rnorm(num_ave_S * num_ave_R, 0, sigma_E)
+          E_kij2 <- rnorm(num_ave_S * num_ave_R, 0, sigma_E)
+          y_kij1[l] <- mu + C_k + mean(S_ki) + mean(R_j1) + mean(CR_kj1) + mean(E_kij1)
+          y_kij2[l] <- mu + C_k + mean(S_ki) + mean(R_j2) + mean(CR_kj2) + mean(E_kij2)
+        }
+
+      } else if (type == "consistency") {
+        # rater-related effects are fixed across measurements
+        R_j1 <- rnorm(num_ave_R, 0, sigma_R)
+        R_j2 <- rnorm(num_ave_R, 0, sigma_R)
+
+        for (l in seq_len(rep_size)) {
+          C_k <- rnorm(1, 0, sigma_C)
+          CR_kj1 <- rnorm(num_ave_R, 0, sigma_CR) # C is still random -> CR random
+          CR_kj2 <- rnorm(num_ave_R, 0, sigma_CR)
+          E_kij1 <- rnorm(num_ave_S * num_ave_R, 0, sigma_E)
+          E_kij2 <- rnorm(num_ave_S * num_ave_R, 0, sigma_E)
+          y_kij1[l] <- mu + C_k + mean(S_ki) + mean(R_j1) + mean(CR_kj1) + mean(E_kij1)
+          y_kij2[l] <- mu + C_k + mean(S_ki) + mean(R_j2) + mean(CR_kj2) + mean(E_kij2)
+        }
+
+      }
+    }
+  }
+
+  return(cor(y_kij1, y_kij2))
+}
+```
+
+
+```{r}
+
+icc_cor <- function(pars, 
+                    model = c("oneway", "twoway-random", "twoway-mixed", "threeway-nested", "threeway-nestcrossed"),
+                    type = c("agreement", "consistency"),
+                    unit = c("single", "average"), 
+                    level = c("cluster", "subject"),
+                    clus_score_form = c("manifest", "latent"),
+                    rep_size = 1000) {
+  model <- match.arg(model)
+  type <- match.arg(type)
+  unit <- match.arg(unit)
+  clus_score_form <- match.arg(clus_score_form)
+
+  icc <- switch(model, 
+    "oneway" = oneway_icc(pars, unit, rep_size),
+    "twoway-random" = twoway_random_icc(pars, type, unit, rep_size),
+    "twoway-mixed" = twoway_mixed_icc(pars, type, unit, rep_size),
+    "threeway-nested" = threeway_nested_icc(pars, unit, level, clus_score_form, rep_size),
+    "threeway-nestcrossed" = threeway_nestcrossed_icc(pars, type, unit, level, clus_score_form, rep_size)
+  )
+
+  return(icc)
+}
+```
+
+
+
+```{r}
+#| label: case1-icc-sim
+ 
+M <- 3
+sigma_S <- 3
+sigma_E <- 2
+ICC_1 <- sigma_S^2 / (sigma_S^2 + sigma_E^2)
+ICC_k <- sigma_S^2 / (sigma_S^2 + sigma_E^2 / M)
+
+pars_case1 = list(mu = 2, sigma_S = sigma_S, sigma_E = sigma_E, M = M)
+
+ICC_1 
+icc_cor(pars = pars_case1,
+        model = "oneway", unit = "single", rep_size = 10000)
+ICC_k
+icc_cor(pars = pars_case1,
+        model = "oneway", unit = "average", rep_size = 10000)
+```
+
+
+```{r}
+
+rep_size <- c(100, 1000, 10000)
+M <- c(5, 30, 50)
+sigma_E <- c(1, 3, 5)
+sigma_SE_ratio <- c(0.5, 1, 2)
+
+case1_sim <- 
+  expand_grid(
+    rep_size = rep_size,
+    M = M,
+    sigma_E = sigma_E,
+    sigma_SE_ratio = sigma_SE_ratio
+  ) |>
+  mutate(
+    sigma_S = sigma_SE_ratio * sigma_E, 
+    pars = list_transpose(list(sigma_S = sigma_S, sigma_E = sigma_E, M = M), simplify = FALSE),
+    ICC_1 = sigma_S^2 / (sigma_S^2 + sigma_E^2),
+    ICC_k = sigma_S^2 / (sigma_S^2 + sigma_E^2 / M), 
+    icc_1 = future_map2_dbl(
+      pars, rep_size,
+      ~ icc_cor(pars = .x, model = "oneway", unit = "single", rep_size = .y),
+      .options = furrr_options(seed = TRUE)
+    ), 
+    icc_k = future_map2_dbl(
+      pars, rep_size,
+      ~ icc_cor(pars = .x, model = "oneway", unit = "average", rep_size = .y),
+      .options = furrr_options(seed = TRUE)
+    )
+  ) 
+
+```
+
+```{r}
+case1_sim |> 
+  select(rep_size, M, sigma_E, sigma_SE_ratio, ICC_1, icc_1) |> 
+  ggplot(aes(x = factor(rep_size), y = icc_1)) +
+  geom_point() + 
+  geom_hline(aes(yintercept = ICC_1), linetype = "dashed", color = "gray") +
+  facet_grid(sigma_SE_ratio ~ M + sigma_E, 
+             labeller = label_bquote(rows = sigma[S]/sigma[E] == .(sigma_SE_ratio),
+                                     cols = atop(paste("M =", .(M)), 
+                                                 paste(sigma[E], "=", .(sigma_E)))))
+```
+
+```{r}
+case1_sim |> 
+  select(rep_size, M, sigma_E, sigma_SE_ratio, ICC_k, icc_k) |> 
+  ggplot(aes(x = factor(rep_size), y = icc_k)) +
+  geom_point() + 
+  geom_hline(aes(yintercept = ICC_k), linetype = "dashed", color = "gray") +
+  facet_grid(sigma_SE_ratio ~ M + sigma_E, 
+             labeller = label_bquote(rows = sigma[S]/sigma[E] == .(sigma_SE_ratio),
+                                     cols = atop(paste("M =", .(M)), 
+                                                 paste(sigma[E], "=", .(sigma_E)))))
+```
+
+
+## Case 2: Two-way Random-Effect ANOVA
+
+Subject: $i = 1, \dots, N$, Raters: $j = 1, \dots, M$. Subjects and raters are crossed with each other.
+
+$$
+  Y_{ij} = \mu + S_i + R_j + (SR_{ij} + E_{ij}^*) = \mu + S_i + R_j + E_{ij}
+$$
+
+where
+
+-   $S_i \sim N(0, \sigma_S^2)$
+-   $R_j \sim N(0, \sigma_R^2)$
+-   $E_{ij} \sim N(0, \sigma_E^2)$
+
+
+```{r}
+M <- 3
+sigma_S <- 3
+sigma_R <- 5
+sigma_E <- 2
+ICC_A1 <- sigma_S^2 / (sigma_S^2 + sigma_R^2 + sigma_E^2)
+ICC_Ak <- sigma_S^2 / (sigma_S^2 + sigma_R^2 / M + sigma_E^2 / M)
+ICC_C1 <- sigma_S^2 / (sigma_S^2 + sigma_E^2)
+ICC_Ck <- sigma_S^2 / (sigma_S^2 + sigma_E^2 / M)
+
+pars_case2 = list(mu = 2, sigma_S = sigma_S, sigma_R = sigma_R, sigma_E = sigma_E, M = M)
+
+ICC_A1
+icc_cor(pars = pars_case2, model = "twoway-random", type = "agreement", unit = "single", rep_size = 10000)
+ICC_Ak
+icc_cor(pars = pars_case2, model = "twoway-random", type = "agreement", unit = "average", rep_size = 10000)
+ICC_C1
+icc_cor(pars = pars_case2, model = "twoway-random", type = "consistency", unit = "single", rep_size = 10000)
+ICC_Ck
+icc_cor(pars = pars_case2, model = "twoway-random", type = "consistency", unit = "average", rep_size = 10000)
+
+```
+
+
+```{r}
+rep_size <- c(100, 1000, 10000)
+M <- c(5, 30, 50)
+sigma_E <- c(1, 3, 5)
+sigma_SE_ratio <- c(0.5, 1, 2)
+sigma_RE_ratio <- c(0.5, 1, 2)
+
+case2_sim <- 
+  expand_grid(
+    rep_size = rep_size,
+    M = M,
+    sigma_E = sigma_E,
+    sigma_SE_ratio = sigma_SE_ratio,
+    sigma_RE_ratio = sigma_RE_ratio
+  ) |>
+  mutate(
+    sigma_S = sigma_SE_ratio * sigma_E, 
+    sigma_R = sigma_RE_ratio * sigma_E,
+    pars = list_transpose(list(sigma_S = sigma_S, sigma_R = sigma_R, sigma_E = sigma_E, M = M), simplify = FALSE),
+    ICC_A1 = sigma_S^2 / (sigma_S^2 + sigma_R^2 + sigma_E^2),
+    ICC_Ak = sigma_S^2 / (sigma_S^2 + sigma_R^2 / M + sigma_E^2 / M),
+    ICC_C1 = sigma_S^2 / (sigma_S^2 + sigma_E^2),
+    ICC_Ck = sigma_S^2 / (sigma_S^2 + sigma_E^2 / M), 
+    icc_A1 = future_map2_dbl(
+      pars, rep_size,
+      ~ icc_cor(pars = .x, model = "twoway-random", type = "agreement",unit = "single", rep_size = .y),
+      .options = furrr_options(seed = TRUE)
+    ), 
+    icc_Ak = future_map2_dbl(
+      pars, rep_size,
+      ~ icc_cor(pars = .x, model = "twoway-random", type = "agreement", unit = "average", rep_size = .y),
+      .options = furrr_options(seed = TRUE)
+    ),
+    icc_C1 = future_map2_dbl(
+      pars, rep_size,
+      ~ icc_cor(pars = .x, model = "twoway-random", type = "consistency", unit = "single", rep_size = .y),
+      .options = furrr_options(seed = TRUE)
+    ), 
+    icc_Ck = future_map2_dbl(
+      pars, rep_size,
+      ~ icc_cor(pars = .x, model = "twoway-random", type = "consistency",unit = "average", rep_size = .y),
+      .options = furrr_options(seed = TRUE)
+    )
+  ) 
+
+```
+
+
+
+```{r}
+case2_sim |> 
+  select(rep_size, M, sigma_E, sigma_SE_ratio, sigma_RE_ratio, ICC_A1, icc_A1) |> 
+  filter(sigma_E == 1) |> 
+  ggplot(aes(x = factor(rep_size), y = icc_A1)) +
+  geom_point() + 
+  geom_hline(aes(yintercept = ICC_A1), linetype = "dashed", color = "gray") +
+  facet_grid(sigma_SE_ratio ~ M + sigma_RE_ratio, 
+             labeller = label_bquote(rows = sigma[S]/sigma[E] == .(sigma_SE_ratio),
+                                     cols = atop(paste("M =", .(M)), 
+                                                 paste(sigma[R]/sigma[E], "=", .(sigma_RE_ratio)))))
+```
+
+```{r}
+case2_sim |> 
+  select(rep_size, M, sigma_E, sigma_SE_ratio, sigma_RE_ratio, ICC_Ak, icc_Ak) |> 
+  filter(sigma_E == 1) |> 
+  ggplot(aes(x = factor(rep_size), y = icc_Ak)) +
+  geom_point() + 
+  geom_hline(aes(yintercept = ICC_Ak), linetype = "dashed", color = "gray") +
+  facet_grid(sigma_SE_ratio ~ M + sigma_RE_ratio, 
+             labeller = label_bquote(rows = sigma[S]/sigma[E] == .(sigma_SE_ratio),
+                                     cols = atop(paste("M =", .(M)), 
+                                                 paste(sigma[R]/sigma[E], "=", .(sigma_RE_ratio)))))
+```
+
+
+```{r}
+case2_sim |> 
+  select(rep_size, M, sigma_E, sigma_SE_ratio, sigma_RE_ratio, ICC_C1, icc_C1) |> 
+  filter(sigma_E == 5) |> 
+  ggplot(aes(x = factor(rep_size), y = icc_C1)) +
+  geom_point() + 
+  geom_hline(aes(yintercept = ICC_C1), linetype = "dashed", color = "gray") +
+  facet_grid(sigma_SE_ratio ~ M + sigma_RE_ratio, 
+             labeller = label_bquote(rows = sigma[S]/sigma[E] == .(sigma_SE_ratio),
+                                     cols = atop(paste("M =", .(M)), 
+                                                 paste(sigma[R]/sigma[E], "=", .(sigma_RE_ratio)))))
+```
+
+```{r}
+case2_sim |> 
+  select(rep_size, M, sigma_E, sigma_SE_ratio, sigma_RE_ratio, ICC_Ck, icc_Ck) |> 
+  filter(sigma_E == 5) |> 
+  ggplot(aes(x = factor(rep_size), y = icc_Ck)) +
+  geom_point() + 
+  geom_hline(aes(yintercept = ICC_Ck), linetype = "dashed", color = "gray") +
+  facet_grid(sigma_SE_ratio ~ M + sigma_RE_ratio, 
+             labeller = label_bquote(rows = sigma[S]/sigma[E] == .(sigma_SE_ratio),
+                                     cols = atop(paste("M =", .(M)), 
+                                                 paste(sigma[R]/sigma[E], "=", .(sigma_RE_ratio)))))
+```
+
+## Case 3: Two-way Mixed-Effect ANOVA
+
+
+::: {.callout-important}
+Sampling with? or without? replacement
+:::
+
+
+The most wierd thing is that coudl I say or difinte the variance of $R_j$, i.e., $Var(R_j) = 0?$ or $=\theta_R^2?$
+
+
+
+
+
+
+If I do not seem the dispersion between rater as a source of variance
+
+
+$$
+  Var(Y_{Ij}) = \sigam_S^2 + \sigma_E^2 
+$$
+
+@shrout1979 resulrs. They only definet ICC(3, 1) and ICC(3, k) (i.e., ICC(C, 1) and ICC(C, k) in @mcgrow1996 notation) for the two-way mixed effect model.
+
+If I seem the dispersion between rater as a source of variance,
+
+$$
+  Var(Y_{IJ}) = \sigam_S^2 + \theta_R^2 + \sigma_E^2
+$$
+
+
+However, in my simulation precedure, I do sample the raters from the finite set of raters. Thus, it provide some dispersion when I calculate the ICC by correlation approach.
+
+the definition of ICC(A, 1) and ICC(A, k) still have some problems ...
+
+
+
+```{r}
+M <- 3
+sigma_S <- 3
+theta_R <- 8
+sigma_E <- 2
+ICC_A1 <- sigma_S^2 / (sigma_S^2 + theta_R^2 + sigma_E^2)
+ICC_A1_fixed <- (sigma_S^2 - theta_R^2 / (M-1)) / (sigma_S^2 + theta_R^2 + sigma_E^2)
+ICC_Ak <- sigma_S^2 / (sigma_S^2 + theta_R^2 / M + sigma_E^2 / M)
+ICC_Ak_fixed <- sigma_S^2 / (sigma_S^2 + sigma_E^2 / M)
+ICC_C1 <- sigma_S^2 / (sigma_S^2 + sigma_E^2)
+ICC_Ck <- sigma_S^2 / (sigma_S^2 + sigma_E^2 / M)
+
+pars_case3 = list(mu = 2, sigma_S = sigma_S, theta_R = theta_R, sigma_E = sigma_E, M = M)
+
+ICC_A1; ICC_A1_fixed
+icc_cor(pars = pars_case3, model = "twoway-mixed", type = "agreement", unit = "single", rep_size = 10000)
+ICC_Ak; ICC_Ak_fixed
+icc_cor(pars = pars_case3, model = "twoway-mixed", type = "agreement", unit = "average", rep_size = 10000)
+ICC_C1
+icc_cor(pars = pars_case3, model = "twoway-mixed", type = "consistency", unit = "single", rep_size = 10000)
+ICC_Ck
+icc_cor(pars = pars_case3, model = "twoway-mixed", type = "consistency", unit = "average", rep_size = 10000)
+
+```
+
+
+```{r}
+rep_size <- c(100, 1000, 10000)
+M <- c(3, 5, 10)
+sigma_E <- c(1, 3, 5)
+sigma_SE_ratio <- c(0.5, 1, 2)
+sigma_RE_ratio <- c(1, 3, 5)
+
+case3_sim <- 
+  expand_grid(
+    rep_size = rep_size,
+    M = M,
+    sigma_E = sigma_E,
+    sigma_SE_ratio = sigma_SE_ratio,
+    sigma_RE_ratio = sigma_RE_ratio
+  ) |>
+  mutate(
+    sigma_S = sigma_SE_ratio * sigma_E, 
+    theta_R = sigma_RE_ratio * sigma_E,
+    pars = list_transpose(list(sigma_S = sigma_S, theta_R = theta_R, sigma_E = sigma_E, M = M), simplify = FALSE),
+    ICC_A1 = sigma_S^2 / (sigma_S^2 + theta_R^2 + sigma_E^2),
+    ICC_Ak = sigma_S^2 / (sigma_S^2 + theta_R^2 / M + sigma_E^2 / M),
+    ICC_A1_fixed = (sigma_S^2 - theta_R^2 / (M-1)) / (sigma_S^2 + theta_R^2 + sigma_E^2),
+    ICC_Ak_fixed = sigma_S^2 / (sigma_S^2 + sigma_E^2 / M),
+    ICC_C1 = sigma_S^2 / (sigma_S^2 + sigma_E^2),
+    ICC_Ck = sigma_S^2 / (sigma_S^2 + sigma_E^2 / M), 
+    icc_A1 = future_map2_dbl(
+      pars, rep_size,
+      ~ icc_cor(pars = .x, model = "twoway-mixed", type = "agreement",unit = "single", rep_size = .y),
+      .options = furrr_options(seed = TRUE)
+    ), 
+    icc_Ak = future_map2_dbl(
+      pars, rep_size,
+      ~ icc_cor(pars = .x, model = "twoway-mixed", type = "agreement", unit = "average", rep_size = .y),
+      .options = furrr_options(seed = TRUE)
+    ),
+    icc_C1 = future_map2_dbl(
+      pars, rep_size,
+      ~ icc_cor(pars = .x, model = "twoway-mixed", type = "consistency", unit = "single", rep_size = .y),
+      .options = furrr_options(seed = TRUE)
+    ), 
+    icc_Ck = future_map2_dbl(
+      pars, rep_size,
+      ~ icc_cor(pars = .x, model = "twoway-mixed", type = "consistency",unit = "average", rep_size = .y),
+      .options = furrr_options(seed = TRUE)
+    )
+  ) 
+
+```
+
+
+
+```{r}
+case3_sim |> 
+  select(rep_size, M, sigma_E, sigma_SE_ratio, sigma_RE_ratio, ICC_A1, ICC_A1_fixed, icc_A1) |> 
+  filter(sigma_E == 1) |> 
+  ggplot(aes(x = factor(rep_size), y = icc_A1)) +
+  geom_point() + 
+  geom_hline(aes(yintercept = ICC_A1), linetype = "dashed", color = "gray") +
+  geom_hline(aes(yintercept = ICC_A1_fixed), linetype = "dotted", color = "blue") +
+  facet_grid(sigma_SE_ratio ~ M + sigma_RE_ratio, 
+             labeller = label_bquote(rows = sigma[S]/sigma[E] == .(sigma_SE_ratio),
+                                     cols = atop(paste("M =", .(M)), 
+                                                 paste(theta[R]/sigma[E], "=", .(sigma_RE_ratio)))))
+```
+
+```{r}
+case3_sim |> 
+  select(rep_size, M, sigma_E, sigma_SE_ratio, sigma_RE_ratio, ICC_Ak, ICC_Ak_fixed, icc_Ak) |> 
+  filter(sigma_E == 1) |> 
+  ggplot(aes(x = factor(rep_size), y = icc_Ak)) +
+  geom_point() + 
+  geom_hline(aes(yintercept = ICC_Ak), linetype = "dashed", color = "gray") +
+  geom_hline(aes(yintercept = ICC_Ak_fixed), linetype = "dotted", color = "blue") +
+
+  facet_grid(sigma_SE_ratio ~ M + sigma_RE_ratio, 
+             labeller = label_bquote(rows = sigma[S]/sigma[E] == .(sigma_SE_ratio),
+                                     cols = atop(paste("M =", .(M)), 
+                                                 paste(theta[R]/sigma[E], "=", .(sigma_RE_ratio)))))
+```
+
+
+```{r}
+case3_sim |> 
+  select(rep_size, M, sigma_E, sigma_SE_ratio, sigma_RE_ratio, ICC_C1, icc_C1) |> 
+  filter(sigma_E == 1) |> 
+  ggplot(aes(x = factor(rep_size), y = icc_C1)) +
+  geom_point() + 
+  geom_hline(aes(yintercept = ICC_C1), linetype = "dashed", color = "gray") +
+  facet_grid(sigma_SE_ratio ~ M + sigma_RE_ratio, 
+             labeller = label_bquote(rows = sigma[S]/sigma[E] == .(sigma_SE_ratio),
+                                     cols = atop(paste("M =", .(M)), 
+                                                 paste(theta[R]/sigma[E], "=", .(sigma_RE_ratio)))))
+```
+
+```{r}
+case3_sim |> 
+  select(rep_size, M, sigma_E, sigma_SE_ratio, sigma_RE_ratio, ICC_Ck, icc_Ck) |> 
+  filter(sigma_E == 1) |> 
+  ggplot(aes(x = factor(rep_size), y = icc_Ck)) +
+  geom_point() + 
+  geom_hline(aes(yintercept = ICC_Ck), linetype = "dashed", color = "gray") +
+  facet_grid(sigma_SE_ratio ~ M + sigma_RE_ratio, 
+             labeller = label_bquote(rows = sigma[S]/sigma[E] == .(sigma_SE_ratio),
+                                     cols = atop(paste("M =", .(M)), 
+                                                 paste(theta[R]/sigma[E], "=", .(sigma_RE_ratio)))))
+```
+
+
+
+## Case 4: Three-way Rater(Person(Cluster)) ANOVA Design
+
+Subject: $i = 1, \dots, N$, Raters: $j = 1, \dots, M$ and Clusters: $k = 1, \dots, C$. Subjects are nested within clusters, and raters are crossed with subjects.
+
+$$
+y_{j(i(k))} = \mu + C_k + S(C)_{i(k)} + \epsilon_{j(i(k))}
+$$
+
+
+
+```{r}
+N <- 4
+M <- 3
+sigma_C <- 2
+sigma_S <- 3
+sigma_E <- 4
+
+ICC_1_S <- sigma_S^2 / (sigma_S^2 + sigma_E^2)
+ICC_k_S <- sigma_S^2 / (sigma_S^2 + sigma_E^2 / M)
+ICC_1_Cman <- sigma_C^2 / (sigma_C^2 + sigma_S^2 + sigma_E^2)
+ICC_k_Cman <- sigma_C^2 / (sigma_C^2 + sigma_S^2 / N + sigma_E^2 / (N*M))
+ICC_1_Clat <- sigma_C^2 / (sigma_C^2 + sigma_E^2)
+ICC_k_Clat <- sigma_C^2 / (sigma_C^2 + sigma_E^2 / (N*M))
+
+pars_case4 = list(mu = 2, sigma_C = sigma_C, sigma_S = sigma_S, sigma_E = sigma_E, N = N, M = M)
+
+ICC_1_S
+icc_cor(pars = pars_case4, model = "threeway-nested", unit = "single", level = "subject", rep_size = 10000)
+ICC_k_S
+icc_cor(pars = pars_case4, model = "threeway-nested", unit = "average", level = "subject", rep_size = 100000)
+ICC_1_Cman
+icc_cor(pars = pars_case4, model = "threeway-nested", unit = "single", level = "cluster", clus_score_form = "manifest", rep_size = 100000)
+ICC_k_Cman
+icc_cor(pars = pars_case4, model = "threeway-nested", unit = "average", level = "cluster", clus_score_form = "manifest", rep_size = 100000)
+ICC_1_Clat
+icc_cor(pars = pars_case4, model = "threeway-nested", unit = "single", level = "cluster", clus_score_form = "latent", rep_size = 100000)
+ICC_k_Clat
+icc_cor(pars = pars_case4, model = "threeway-nested", unit = "average", level = "cluster", clus_score_form = "latent", rep_size = 100000)
+
+```
+
+
+
+```{r}
+rep_size <- c(100, 1000, 10000)
+N <- c(2, 4, 6)
+M <- c(3, 4, 5)
+sigma_E <- c(3)
+sigma_CE_ratio <- c(0.25, 0.5, 1)
+sigma_SE_ratio <- c(0.5, 1, 2)
+
+case4_sim <- 
+  expand_grid(
+    rep_size = rep_size,
+    N = N, 
+    M = M,
+    sigma_E = sigma_E,
+    sigma_SE_ratio = sigma_SE_ratio,
+    sigma_CE_ratio = sigma_CE_ratio
+  ) |>
+  mutate(
+    sigma_S = sigma_SE_ratio * sigma_E, 
+    sigma_C = sigma_CE_ratio * sigma_E,
+    pars = list_transpose(list(sigma_C = sigma_C, sigma_S = sigma_S, sigma_E = sigma_E, N = N, M = M), simplify = FALSE),
+    ICC_1_S = sigma_S^2 / (sigma_S^2 + sigma_E^2),
+    ICC_k_S = sigma_S^2 / (sigma_S^2 + sigma_E^2 / M),
+    ICC_1_Cman = sigma_C^2 / (sigma_C^2 + sigma_S^2 + sigma_E^2),
+    ICC_k_Cman = sigma_C^2 / (sigma_C^2 + sigma_S^2 / N + sigma_E^2 / (N*M)),
+    ICC_1_Clat = sigma_C^2 / (sigma_C^2 + sigma_E^2),
+    ICC_k_Clat = sigma_C^2 / (sigma_C^2 + sigma_E^2 / (N*M)), 
+    icc_1_S = future_map2_dbl(
+      pars, rep_size,
+      ~ icc_cor(pars = .x, model = "threeway-nested", unit = "single", level = "subject", rep_size = .y),
+      .options = furrr_options(seed = TRUE)
+    ), 
+    icc_k_S = future_map2_dbl(
+      pars, rep_size,
+      ~ icc_cor(pars = .x, model = "threeway-nested", unit = "average", level = "subject", rep_size = .y),
+      .options = furrr_options(seed = TRUE)
+    ), 
+    icc_1_Cman = future_map2_dbl(
+      pars, rep_size,
+      ~ icc_cor(pars = .x, model = "threeway-nested", unit = "single", level = "cluster", clus_score_form = "manifest", rep_size = .y),
+      .options = furrr_options(seed = TRUE)
+    ), 
+    icc_k_Cman = future_map2_dbl(
+      pars, rep_size,
+      ~ icc_cor(pars = .x, model = "threeway-nested", unit = "average", level = "cluster", clus_score_form = "manifest", rep_size = .y),
+      .options = furrr_options(seed = TRUE)
+    ), 
+    icc_1_Clat = future_map2_dbl(
+      pars, rep_size,
+      ~ icc_cor(pars = .x, model = "threeway-nested", unit = "single", level = "cluster", clus_score_form = "latent", rep_size = .y),
+      .options = furrr_options(seed = TRUE)
+    ), 
+    icc_k_Clat = future_map2_dbl(
+      pars, rep_size,
+      ~ icc_cor(pars = .x, model = "threeway-nested", unit = "average", level = "cluster", clus_score_form = "latent", rep_size = .y),
+      .options = furrr_options(seed = TRUE)
+    ) 
+  ) 
+```
+
+
+```{r}
+case4_sim |> 
+  select(rep_size, N, M, sigma_E, sigma_SE_ratio, sigma_CE_ratio, ICC_1_S, icc_1_S) |> 
+  ggplot(aes(x = factor(rep_size), y = icc_1_S)) +
+  geom_point() + 
+  geom_hline(aes(yintercept = ICC_1_S), linetype = "dashed", color = "gray") +
+  facet_grid(N + sigma_SE_ratio ~ M + sigma_CE_ratio, 
+             labeller = label_bquote(rows = atop(paste("N =", .(N)),
+                                                 paste(sigma[S]/sigma[E] == .(sigma_SE_ratio))),
+                                     cols = atop(paste("M =", .(M)), 
+                                                 paste(sigma[C]/sigma[E], "=", .(sigma_CE_ratio)))),
+            scales = "free")
+```
+
+
+```{r}
+case4_sim |> 
+  select(rep_size, N, M, sigma_E, sigma_SE_ratio, sigma_CE_ratio, ICC_k_S, icc_k_S) |> 
+  ggplot(aes(x = factor(rep_size), y = icc_k_S)) +
+  geom_point() + 
+  geom_hline(aes(yintercept = ICC_k_S), linetype = "dashed", color = "gray") +
+  facet_grid(N + sigma_SE_ratio ~ M + sigma_CE_ratio, 
+             labeller = label_bquote(rows = atop(paste("N =", .(N)),
+                                                 paste(sigma[S]/sigma[E] == .(sigma_SE_ratio))),
+                                     cols = atop(paste("M =", .(M)), 
+                                                 paste(sigma[C]/sigma[E], "=", .(sigma_CE_ratio)))),
+            scales = "free")
+```
+
+
+
+```{r}
+case4_sim |> 
+  select(rep_size, N, M, sigma_E, sigma_SE_ratio, sigma_CE_ratio, ICC_1_Cman, icc_1_Cman) |> 
+  ggplot(aes(x = factor(rep_size), y = icc_1_Cman)) +
+  geom_point() + 
+  geom_hline(aes(yintercept = ICC_1_Cman), linetype = "dashed", color = "gray") +
+  facet_grid(N + sigma_SE_ratio ~ M + sigma_CE_ratio, 
+             labeller = label_bquote(rows = atop(paste("N =", .(N)),
+                                                 paste(sigma[S]/sigma[E] == .(sigma_SE_ratio))),
+                                     cols = atop(paste("M =", .(M)), 
+                                                 paste(sigma[C]/sigma[E], "=", .(sigma_CE_ratio)))),
+            scales = "free")
+```
+
+```{r}
+case4_sim |> 
+  select(rep_size, N, M, sigma_E, sigma_SE_ratio, sigma_CE_ratio, ICC_k_Cman, icc_k_Cman) |> 
+  ggplot(aes(x = factor(rep_size), y = icc_k_Cman)) +
+  geom_point() + 
+  geom_hline(aes(yintercept = ICC_k_Cman), linetype = "dashed", color = "gray") +
+  facet_grid(N + sigma_SE_ratio ~ M + sigma_CE_ratio, 
+             labeller = label_bquote(rows = atop(paste("N =", .(N)),
+                                                 paste(sigma[S]/sigma[E] == .(sigma_SE_ratio))),
+                                     cols = atop(paste("M =", .(M)), 
+                                                 paste(sigma[C]/sigma[E], "=", .(sigma_CE_ratio)))),
+            scales = "free")
+```
+
+```{r}
+case4_sim |> 
+  select(rep_size, N, M, sigma_E, sigma_SE_ratio, sigma_CE_ratio, ICC_1_Clat, icc_1_Clat) |> 
+  ggplot(aes(x = factor(rep_size), y = icc_1_Clat)) +
+  geom_point() + 
+  geom_hline(aes(yintercept = ICC_1_Clat), linetype = "dashed", color = "gray") +
+  facet_grid(N + sigma_SE_ratio ~ M + sigma_CE_ratio, 
+             labeller = label_bquote(rows = atop(paste("N =", .(N)),
+                                                 paste(sigma[S]/sigma[E] == .(sigma_SE_ratio))),
+                                     cols = atop(paste("M =", .(M)), 
+                                                 paste(sigma[C]/sigma[E], "=", .(sigma_CE_ratio)))),
+            scales = "free")
+```
+
+```{r}
+case4_sim |> 
+  select(rep_size, N, M, sigma_E, sigma_SE_ratio, sigma_CE_ratio, ICC_k_Clat, icc_k_Clat) |> 
+  ggplot(aes(x = factor(rep_size), y = icc_k_Clat)) +
+  geom_point() + 
+  geom_hline(aes(yintercept = ICC_k_Clat), linetype = "dashed", color = "gray") +
+  facet_grid(N + sigma_SE_ratio ~ M + sigma_CE_ratio, 
+             labeller = label_bquote(rows = atop(paste("N =", .(N)),
+                                                 paste(sigma[S]/sigma[E] == .(sigma_SE_ratio))),
+                                     cols = atop(paste("M =", .(M)), 
+                                                 paste(sigma[C]/sigma[E], "=", .(sigma_CE_ratio)))),
+            scales = "free")
+```
+
+
+## Case 5: Person(Cluster) x Rater ANOVA Design
+
+$$
+Y_{i(k)j} = \mu + C_k + S_{i(k)} + R_j + (C \times R)_{kj} + E_{i(k)j}
+$$
+
+
+There are up to 12 ICCs in this design ...
+
+```{r}
+N <- 4
+M <- 3
+sigma_C <- 2
+sigma_S <- 3
+sigma_R <- 4
+sigma_CR <- 1.5
+sigma_E <- 5
+
+pars_case5 = list(mu = 2, sigma_C = sigma_C, sigma_S = sigma_S, sigma_R = sigma_R, sigma_CR = sigma_CR, sigma_E = sigma_E, N = N, M = M)
+
+(ICC_A1_S <- sigma_S^2 / (sigma_S^2 + sigma_R^2 + sigma_CR^2 + sigma_E^2))
+icc_cor(pars = pars_case5, model = "threeway-nestcrossed", type = "agreement", unit = "single", level = "subject", rep_size = 100000)
+(ICC_Ak_S <- sigma_S^2 / (sigma_S^2 + sigma_R^2 / M + sigma_CR^2 / M + sigma_E^2 / M))
+icc_cor(pars = pars_case5, model = "threeway-nestcrossed", type = "agreement", unit = "average", level = "subject", rep_size = 100000)
+
+(ICC_C1_S <- sigma_S^2 / (sigma_S^2 + sigma_E^2))
+icc_cor(pars = pars_case5, model = "threeway-nestcrossed", type = "consistency", unit = "single", level = "subject", rep_size = 100000)
+(ICC_Ck_S <- sigma_S^2 / (sigma_S^2 + sigma_E^2 / M))
+icc_cor(pars = pars_case5, model = "threeway-nestcrossed", type = "consistency", unit = "average", level = "subject", rep_size = 100000)
+
+(ICC_A1_Cman <- sigma_C^2 / (sigma_C^2 + sigma_S^2 + sigma_R^2 + sigma_CR^2 + sigma_E^2))
+icc_cor(pars = pars_case5, model = "threeway-nestcrossed", type = "agreement", unit = "single", level = "cluster", clus_score_form = "manifest", rep_size = 100000)
+(ICC_Ak_Cman <- sigma_C^2 / (sigma_C^2 + sigma_S^2 / N + sigma_R^2 / M + sigma_CR^2 / M + sigma_E^2 / (N*M)))
+icc_cor(pars = pars_case5, model = "threeway-nestcrossed", type = "agreement", unit = "average", level = "cluster", clus_score_form = "manifest", rep_size = 100000)
+
+(ICC_C1_Cman <- sigma_C^2 / (sigma_C^2 + sigma_S^2 + sigma_CR^2 + sigma_E^2))
+icc_cor(pars = pars_case5, model = "threeway-nestcrossed", type = "consistency", unit = "single", level = "cluster", clus_score_form = "manifest", rep_size = 100000)
+(ICC_Ck_Cman <- sigma_C^2 / (sigma_C^2 + sigma_S^2 / N + sigma_CR^2 / M + sigma_E^2 / (N*M)))
+icc_cor(pars = pars_case5, model = "threeway-nestcrossed", type = "consistency", unit = "average", level = "cluster", clus_score_form = "manifest", rep_size = 100000)
+
+(ICC_A1_Clat <- sigma_C^2 / (sigma_C^2 + sigma_R^2 + sigma_CR^2 + sigma_E^2))
+icc_cor(pars = pars_case5, model = "threeway-nestcrossed", type = "agreement", unit = "single", level = "cluster", clus_score_form = "latent", rep_size = 100000)
+(ICC_Ak_Clat <- sigma_C^2 / (sigma_C^2 + sigma_R^2 / M + sigma_CR^2 / M + sigma_E^2 / (N*M)))
+icc_cor(pars = pars_case5, model = "threeway-nestcrossed", type = "agreement", unit = "average", level = "cluster", clus_score_form = "latent", rep_size = 100000)
+
+(ICC_C1_Clat <- sigma_C^2 / (sigma_C^2 + sigma_CR^2 + sigma_E^2))
+icc_cor(pars = pars_case5, model = "threeway-nestcrossed", type = "consistency", unit = "single", level = "cluster", clus_score_form = "latent", rep_size = 100000)
+(ICC_Ck_Clat <- sigma_C^2 / (sigma_C^2 + sigma_CR^2 / M + sigma_E^2 / (N*M)))
+icc_cor(pars = pars_case5, model = "threeway-nestcrossed", type = "consistency", unit = "average", level = "cluster", clus_score_form = "latent", rep_size = 100000)
+
+```
