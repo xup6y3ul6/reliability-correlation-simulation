@@ -1,3 +1,7 @@
+ICC_cor_concept_simulation_cache/*
+ICC_cor_concept_simulation_files/*
+
+
 ## Core latex/pdflatex auxiliary files:
 *.aux
 *.lof

@@ -2,17 +2,19 @@
 title: "Recheck the correlation approach for ICC estimation"
 author: "Tzu-Yao Lin"
 date: last-modified
+bibliography: bibliography.bib
+csl: apa.csl
 execute:
   eval: true
   warning: false
-  cache: false
+  cache: true
 format: 
   html:
     toc: true
     toc-depth: 3
     number-sections: true
     self-contained: true
-    code-fold: false
+    code-fold: true
     code-tools: true
 ---
 
@@ -30,40 +32,24 @@ library(furrr)
 plan(multisession, workers = 8)
 library(irr)
 library(psych)
-
+library(gt)
 set.seed(20251210)
 ```
 
 
-
-
-
 # Recheck the correlation approach
 
+> A rigorous definition is adopted for the ICC, namely, that the ICC is the correlation between one measurement (either a single rating or a mean of several ratings) on a target and another measurement obtained on that target. The ICC is thus a bona fide correlation coefficient that, as is shown below, is of ten but not necessarily identical to the component of variance due to targets divided by the sum of it and other variance components [@shrout1979].
 
+The following codes are functions to simulate data under five different ANOVA models and compute the ICC as the correlation between two measurements on the same target or cluster. If the effects are random effects, they are independently generated for the two measurements. If the effects are fixed effects, they are held constant across the all replications (`rep_size`).
 
-> A rigorous definition is adopted for the ICC, namely, that the ICC is the correlation between one measurement (either a single rating or a mean of several ratings) on a target and another measurement obtained on that target. The ICC is thus a bona fide correlation coefficient that, as is shown below, is of ten but not necessarily identical to the component of variance due to targets divided by the sum of it and other variance components. (@shrout1979)
-
-
-
-
-## Case 1: One-way ANOVA (Classcial Test Theory)
-
-Subject: $i = 1, \dots, N$, Raters: $j = 1, \dots, M$ which are nested within subjects.
-
-$$
-  Y_{(j)i} = T_i + E_{(j)i} = \mu + S_i + E_{(j)i}
-$$
-
-where
-
--   $T_i = E_{J}[Y_{(j)i}] = \mu + S_i \sim N(0, \sigma_S^2)$
--   $E_{(j)i} \sim N(0, \sigma_E^2)$
-
-
+::: {.callout-note}
+Please check the handwritten notes first for the simulation procedures.
+:::
 
 
 ```{r}
+#| label: icc-cor-funcs
 
 oneway_icc <- function(pars, 
                        unit = c("single", "average"),
@@ -420,7 +406,8 @@ threeway_nestcrossed_icc <- function(pars,
 
 
 ```{r}
-
+#| label: wrapper-icc-cor-func
+ 
 icc_cor <- function(pars, 
                     model = c("oneway", "twoway-random", "twoway-mixed", "threeway-nested", "threeway-nestcrossed"),
                     type = c("agreement", "consistency"),
@@ -431,6 +418,7 @@ icc_cor <- function(pars,
   model <- match.arg(model)
   type <- match.arg(type)
   unit <- match.arg(unit)
+  level <- match.arg(level)
   clus_score_form <- match.arg(clus_score_form)
 
   icc <- switch(model, 
@@ -447,28 +435,58 @@ icc_cor <- function(pars,
 
 
 
+## Case 1: One-way ANOVA (Classcial Test Theory)
+
+Subject: $i = 1, \dots, N$, Raters: $j = 1, \dots, M$ which are nested within subjects.
+
+$$
+  Y_{(j)i} = T_i + E_{(j)i} = \mu + S_i + E_{(j)i}
+$$
+
+where
+
+- $T_i = E_{J}[Y_{(j)i}] = \mu + S_i$
+- $S_i \sim N(0, \sigma_S^2)$
+- $E_{(j)i} \sim N(0, \sigma_E^2)$
+
+The ICC formulas:
+
+![ICC formulas for Cases 1, 2, and 3 [Table retrived form @liljequist2019]](figures/ICC_case123.png)
+
+**Simplyly check the ICC calculations**
+
 ```{r}
-#| label: case1-icc-sim
- 
+#| label: tab-case1-icc
+#| tab-cap: "ICC calculations for Case 1" 
+
+# parameters
 M <- 3
 sigma_S <- 3
 sigma_E <- 2
-ICC_1 <- sigma_S^2 / (sigma_S^2 + sigma_E^2)
-ICC_k <- sigma_S^2 / (sigma_S^2 + sigma_E^2 / M)
-
 pars_case1 = list(mu = 2, sigma_S = sigma_S, sigma_E = sigma_E, M = M)
 
-ICC_1 
-icc_cor(pars = pars_case1,
-        model = "oneway", unit = "single", rep_size = 10000)
-ICC_k
-icc_cor(pars = pars_case1,
-        model = "oneway", unit = "average", rep_size = 10000)
+# results
+case1_table <- tibble(
+  Reliability = c("ICC(1)", "ICC(k)"),
+  Setting = c(
+    sigma_S^2 / (sigma_S^2 + sigma_E^2),
+    sigma_S^2 / (sigma_S^2 + sigma_E^2 / M)
+  ),
+  Simulation = c(
+    icc_cor(pars = pars_case1, model = "oneway", unit = "single", rep_size = 10000),
+    icc_cor(pars = pars_case1, model = "oneway", unit = "average", rep_size = 10000)
+  )
+) |> 
+  mutate(across(where(is.numeric), ~ round(., 4)))
+
+gt(case1_table)
 ```
 
+**Simulation under different scenarios**
 
 ```{r}
-
+#| label: case1-icc-sim
+ 
 rep_size <- c(100, 1000, 10000)
 M <- c(5, 30, 50)
 sigma_E <- c(1, 3, 5)
@@ -501,6 +519,9 @@ case1_sim <-
 ```
 
 ```{r}
+#| label: fig-case1-icc_1
+#| fig-cap: "ICC(1) for Case 1"
+
 case1_sim |> 
   select(rep_size, M, sigma_E, sigma_SE_ratio, ICC_1, icc_1) |> 
   ggplot(aes(x = factor(rep_size), y = icc_1)) +
@@ -513,6 +534,9 @@ case1_sim |>
 ```
 
 ```{r}
+#| label: fig-case1-icc_k
+#| fig-cap: "ICC(k) for Case 1"
+ 
 case1_sim |> 
   select(rep_size, M, sigma_E, sigma_SE_ratio, ICC_k, icc_k) |> 
   ggplot(aes(x = factor(rep_size), y = icc_k)) +
@@ -527,7 +551,7 @@ case1_sim |>
 
 ## Case 2: Two-way Random-Effect ANOVA
 
-Subject: $i = 1, \dots, N$, Raters: $j = 1, \dots, M$. Subjects and raters are crossed with each other.
+Subject: $i = 1, \dots, N$, Raters: $j = 1, \dots, M$. Subjects and raters are both random effects and crossed with each other.
 
 $$
   Y_{ij} = \mu + S_i + R_j + (SR_{ij} + E_{ij}^*) = \mu + S_i + R_j + E_{ij}
@@ -535,36 +559,51 @@ $$
 
 where
 
--   $S_i \sim N(0, \sigma_S^2)$
--   $R_j \sim N(0, \sigma_R^2)$
--   $E_{ij} \sim N(0, \sigma_E^2)$
+- $S_i \sim N(0, \sigma_S^2)$
+- $R_j \sim N(0, \sigma_R^2)$
+- $E_{ij} \sim N(0, \sigma_E^2)$
 
+and we don't distinguish the interaction and residual error here.
+
+**Simply check the ICC calculations**
 
 ```{r}
+#| label: tab-case2-icc
+#| tab-cap: "ICC calculations for Case 2" 
+
+# parameters
 M <- 3
 sigma_S <- 3
 sigma_R <- 5
 sigma_E <- 2
-ICC_A1 <- sigma_S^2 / (sigma_S^2 + sigma_R^2 + sigma_E^2)
-ICC_Ak <- sigma_S^2 / (sigma_S^2 + sigma_R^2 / M + sigma_E^2 / M)
-ICC_C1 <- sigma_S^2 / (sigma_S^2 + sigma_E^2)
-ICC_Ck <- sigma_S^2 / (sigma_S^2 + sigma_E^2 / M)
-
 pars_case2 = list(mu = 2, sigma_S = sigma_S, sigma_R = sigma_R, sigma_E = sigma_E, M = M)
 
-ICC_A1
-icc_cor(pars = pars_case2, model = "twoway-random", type = "agreement", unit = "single", rep_size = 10000)
-ICC_Ak
-icc_cor(pars = pars_case2, model = "twoway-random", type = "agreement", unit = "average", rep_size = 10000)
-ICC_C1
-icc_cor(pars = pars_case2, model = "twoway-random", type = "consistency", unit = "single", rep_size = 10000)
-ICC_Ck
-icc_cor(pars = pars_case2, model = "twoway-random", type = "consistency", unit = "average", rep_size = 10000)
+# results
+case2_table <- tibble(
+  Reliability = c("ICC(A,1)", "ICC(A,k)", "ICC(C,1)", "ICC(C,k)"),
+  Setting = c(
+    sigma_S^2 / (sigma_S^2 + sigma_R^2 + sigma_E^2),
+    sigma_S^2 / (sigma_S^2 + sigma_R^2 / M + sigma_E^2 / M),
+    sigma_S^2 / (sigma_S^2 + sigma_E^2),
+    sigma_S^2 / (sigma_S^2 + sigma_E^2 / M)
+  ),
+  Simulation = c(
+    icc_cor(pars = pars_case2, model = "twoway-random", type = "agreement", unit = "single", rep_size = 10000),
+    icc_cor(pars = pars_case2, model = "twoway-random", type = "agreement", unit = "average", rep_size = 10000),
+    icc_cor(pars = pars_case2, model = "twoway-random", type = "consistency", unit = "single", rep_size = 10000),
+    icc_cor(pars = pars_case2, model = "twoway-random", type = "consistency", unit = "average", rep_size = 10000)
+  )
+) |> 
+  mutate(across(where(is.numeric), ~ round(., 4)))
 
+gt(case2_table)
 ```
 
+**Simulation under different scenarios**
 
 ```{r}
+#| label: case2-icc-sim
+ 
 rep_size <- c(100, 1000, 10000)
 M <- c(5, 30, 50)
 sigma_E <- c(1, 3, 5)
@@ -612,8 +651,10 @@ case2_sim <-
 ```
 
 
-
 ```{r}
+#| label: fig-case2-icc_a1
+#| fig-cap: "ICC(A, 1) for Case 2"
+
 case2_sim |> 
   select(rep_size, M, sigma_E, sigma_SE_ratio, sigma_RE_ratio, ICC_A1, icc_A1) |> 
   filter(sigma_E == 1) |> 
@@ -627,6 +668,9 @@ case2_sim |>
 ```
 
 ```{r}
+#| label: fig-case2-icc_ak
+#| fig-cap: "ICC(A, k) for Case 2"
+
 case2_sim |> 
   select(rep_size, M, sigma_E, sigma_SE_ratio, sigma_RE_ratio, ICC_Ak, icc_Ak) |> 
   filter(sigma_E == 1) |> 
@@ -639,8 +683,10 @@ case2_sim |>
                                                  paste(sigma[R]/sigma[E], "=", .(sigma_RE_ratio)))))
 ```
 
-
 ```{r}
+#| label: fig-case2-icc_c1
+#| fig-cap: "ICC(C, 1) for Case 2"
+ 
 case2_sim |> 
   select(rep_size, M, sigma_E, sigma_SE_ratio, sigma_RE_ratio, ICC_C1, icc_C1) |> 
   filter(sigma_E == 5) |> 
@@ -654,6 +700,9 @@ case2_sim |>
 ```
 
 ```{r}
+#| label: fig-case2-icc_ck
+#| fig-cap: "ICC(C, k) for Case 2"
+ 
 case2_sim |> 
   select(rep_size, M, sigma_E, sigma_SE_ratio, sigma_RE_ratio, ICC_Ck, icc_Ck) |> 
   filter(sigma_E == 5) |> 
@@ -669,67 +718,124 @@ case2_sim |>
 ## Case 3: Two-way Mixed-Effect ANOVA
 
 
-::: {.callout-important}
-Sampling with? or without? replacement
+Subject: $i = 1, \dots, N$, Raters: $j = 1, \dots, M$. Subjects is a random effect while raters is a fixed effect. Subjects and raters are crossed with each other.
+
+$$
+  Y_{ij} = \mu + S_i + R_j + (SR_{ij} + E_{ij}^*) = \mu + S_i + R_j + E_{ij}
+$$
+
+where
+
+- $S_i \sim N(0, \sigma_S^2)$
+- $\sum_{j=1}^M R_j = 0$ and $\theta_R^2 = \frac{1}{M-1} \sum_{j=1}^M R_j^2$
+- $E_{ij} \sim N(0, \sigma_E^2)$
+
+and we don't distinguish the interaction and residual error here.
+
+There is a big issue how could we define ICC(A, 1) and ICC(A, k) for the two-way mixed effect model by the correlation approach. Following our previous manner used in the two-way random effect model, the agreement ICC definitions would be:
+
+$$
+ICC(A, 1) := Cor(Y_{ij}, Y_{ij'}) = \frac{Cov(Y_{ij}, Y_{ij'})}{\sqrt{Var(Y_{ij}) Var(Y_{ij'})}}
+$$
+
+The problem is when we calculate the variance of $Y_{ij}$, it should be:
+
+$$
+Var(Y_{ij}) = Var(\mu + S_i + R_j + E_{ij}) = \sigma_S^2 + \sigma_E^2, 
+$$
+
+not $\sigma_S^2 + \theta_R^2 + \sigma_E^2$ that is the denominator used in the original ICC(A, 1) definition by @mcgraw1996. The reason is that $R_j$ is a fixed effect, not provide any fluctuation. Thus, it does not provide any variance of measurements. Following this, ICC(A, 1) and ICC(A, k) are exactely the same as ICC(C, 1) and ICC(C, k), respectively. I think that is why @shrout1979 did not define agreement ICC for the two-way mixed effect model.
+
+![Differences of ICC defnition between @shrout1979 and @mcgraw1996 [Table retrived from @koo2016]](figures/koo2016_ICC_compared.png)
+
+Nethertheless, @mcgraw1996 argues that
+
+> Readers familiar with Shrout and Fleiss's (1979) classic paper on intraclass correlation coefficients will note that ICC(A,1) for mixed effects models (Cases 3 and 3A) and ICCs (C,l) and (C,k) for random effects models (Cases 2 and 2A) were not among the ICCs that Shrout and Fleiss defined. These ICCs were omitted because they are not correlations in the strict sense of being ratios of covariance to total variance. Nonetheless, these ICCs are of considerable practical value for measuring degree of relationship. ... Using ICC(A,1) to measure the correlation between parents and children (fixed effects in the model) serves to resolve the different foci of traditional analyses—absolute differences on the one hand and rank order similarities on the otherinto a single measure, one that can be clearly contrasted with a linearity (e.g., r) or additivity (e.g., ICC(C,1)) index. [@mcgraw1996, p. 37-38]
+
+My impression is that the authors simply extend the definitions of ICC(A) and ICC(C) from Case 2 to Case 3 by substituting $\theta_R^2$ for $\sigma_R^2$. However, they do not define the ICC strictly as the correlation between two replicates. Furthermore, their use of ICC(A, k) is not explained in detail.
+
+Therefore, if we accept $\theta_R^2 = Var(R_j), \forall j$ as a measure of **dispersion** for the fixed raters under the constraint $\sum_{j=1}^M R_j = 0$, we can then attempt to derive the value of $Cov(R_j, R_{j'})$:
+
+$$
+\begin{align}
+  &0 = Var(\sum_{j=1}^M R_j) = \sum_{j=1}^M Var(R_j) + \sum\sum_{j \neq j'}Cov(R_j, R_{j'}) = M\theta_R^2 + M(M-1)Cov(R_j, R_{j'})\\
+  \implies  &Cov(R_j, R_{j'}) = -\frac{1}{M-1}\theta_R^2
+\end{align}
+$$
+
+::: {.callout-warning}
+I know this deriviation has some problems .... If there is no $Var(R_j)$ term, then there is no covariance $Cov(R_j, R_{j'})$
 :::
 
-
-The most wierd thing is that coudl I say or difinte the variance of $R_j$, i.e., $Var(R_j) = 0?$ or $=\theta_R^2?$
-
-
-
-
-
-
-If I do not seem the dispersion between rater as a source of variance
-
+Subsequently, the ICC(A, 1) can be derived as:
 
 $$
-  Var(Y_{Ij}) = \sigam_S^2 + \sigma_E^2 
+Cor(Y_{ij}, Y_{ij'}) = \frac{\sigma_S^2 - \frac{1}{M-1}\theta_R^2}{\sigma_S^2 + \theta_R^2 + \sigma_E^2}.
 $$
 
-@shrout1979 resulrs. They only definet ICC(3, 1) and ICC(3, k) (i.e., ICC(C, 1) and ICC(C, k) in @mcgrow1996 notation) for the two-way mixed effect model.
+comparing to the original definition of @mcgraw1996 ICC(A,1), the above equation additionaly minus $\frac{1}{M-1}\theta_R^2$ in the numerator.
 
-If I seem the dispersion between rater as a source of variance,
+On the other hand, for ICC(A, k), because the average of $R_j$ over the $M$ fixed raters is 0, the variance of the average is also 0 across different replications. Thus, the correlation between two main mean ratings for the same subject $i$ is:
 
 $$
-  Var(Y_{IJ}) = \sigam_S^2 + \theta_R^2 + \sigma_E^2
+\begin{align}
+  Cor(\bar{Y}_{i\cdot}, \bar{Y}_{i\cdot'}) 
+    &= Cor\left(\mu + S_i + \frac{1}{M}\sum_{j=1}^M R_j + \frac{1}{M}\sum_{j=1}^M E_{ij}, \mu + S_i + \frac{1}{M}\sum_{j=1}^M R_j + \frac{1}{M}\sum_{j=1}^M E_{ij'}\right) \\
+    &= Cor\left(S_i + 0 + \bar{E}_{i\cdot}, S_i + 0 + \bar{E}_{i\cdot'}\right) \\
+    &= \frac{\sigma_S^2}{\sigma_S^2 + \sigma_E^2 / M} \\
+    &= ICC(C, k)
+\end{align}
 $$
 
+where $\sum_{j=1}^M R_j = 0 = \sum_{j'=1}^M R_{j'}$ becuase the same set of raters (following the fixed effect definition) is used for both measurements. In contrast, $\frac{1}{M}\sum_{j=1}^M E_{ij} \neq \frac{1}{M}\sum_{j'=1}^M E_{ij'}$ because measurement error are always random even thoughts they are based on the same set of raters.
 
-However, in my simulation precedure, I do sample the raters from the finite set of raters. Thus, it provide some dispersion when I calculate the ICC by correlation approach.
+To some extention, the procedure that I used in our correlation simulation treat the fixed raters as if they are random samples from **a finite population of raters?!**, thus providing some variance and covariance. May be we should rethinking the notation of the random variable, replacing $Y_{ij}$ as $Y_{IJ}$, where $I$ is the index for the subject that can be sampled from the target population and $J$ is the index for the rater that could also be sampled from the population of raters, no matter it is a fixed or random effect. 
 
-the definition of ICC(A, 1) and ICC(A, k) still have some problems ...
-
-
+**Simply check the ICC calculations**
 
 ```{r}
+#| label: tab-case3-icc
+#| tab-cap: "ICC calculations for Case 3"
+ 
+# parameters
 M <- 3
 sigma_S <- 3
 theta_R <- 8
 sigma_E <- 2
-ICC_A1 <- sigma_S^2 / (sigma_S^2 + theta_R^2 + sigma_E^2)
-ICC_A1_fixed <- (sigma_S^2 - theta_R^2 / (M-1)) / (sigma_S^2 + theta_R^2 + sigma_E^2)
-ICC_Ak <- sigma_S^2 / (sigma_S^2 + theta_R^2 / M + sigma_E^2 / M)
-ICC_Ak_fixed <- sigma_S^2 / (sigma_S^2 + sigma_E^2 / M)
-ICC_C1 <- sigma_S^2 / (sigma_S^2 + sigma_E^2)
-ICC_Ck <- sigma_S^2 / (sigma_S^2 + sigma_E^2 / M)
-
 pars_case3 = list(mu = 2, sigma_S = sigma_S, theta_R = theta_R, sigma_E = sigma_E, M = M)
 
-ICC_A1; ICC_A1_fixed
-icc_cor(pars = pars_case3, model = "twoway-mixed", type = "agreement", unit = "single", rep_size = 10000)
-ICC_Ak; ICC_Ak_fixed
-icc_cor(pars = pars_case3, model = "twoway-mixed", type = "agreement", unit = "average", rep_size = 10000)
-ICC_C1
-icc_cor(pars = pars_case3, model = "twoway-mixed", type = "consistency", unit = "single", rep_size = 10000)
-ICC_Ck
-icc_cor(pars = pars_case3, model = "twoway-mixed", type = "consistency", unit = "average", rep_size = 10000)
+# results
+case3_table <- tibble(
+  Reliability = c("ICC(A,1)", "ICC(A,k)", "ICC(C,1)", "ICC(C,k)"),
+  Setting = c(
+    sigma_S^2 / (sigma_S^2 + theta_R^2 + sigma_E^2),
+    sigma_S^2 / (sigma_S^2 + theta_R^2 / M + sigma_E^2 / M),
+    sigma_S^2 / (sigma_S^2 + sigma_E^2),
+    sigma_S^2 / (sigma_S^2 + sigma_E^2 / M)
+  ),
+  Setting_corrected = c(
+    (sigma_S^2 - theta_R^2 / (M-1)) / (sigma_S^2 + theta_R^2 + sigma_E^2),
+    sigma_S^2 / (sigma_S^2 + sigma_E^2 / M),
+    sigma_S^2 / (sigma_S^2 + sigma_E^2),
+    sigma_S^2 / (sigma_S^2 + sigma_E^2 / M)
+  ),
+  Simulation = c(
+    icc_cor(pars = pars_case3, model = "twoway-mixed", type = "agreement", unit = "single", rep_size = 10000),
+    icc_cor(pars = pars_case3, model = "twoway-mixed", type = "agreement", unit = "average", rep_size = 10000),
+    icc_cor(pars = pars_case3, model = "twoway-mixed", type = "consistency", unit = "single", rep_size = 10000),
+    icc_cor(pars = pars_case3, model = "twoway-mixed", type = "consistency", unit = "average", rep_size = 10000)
+  )
+) |> 
+  mutate(across(where(is.numeric), ~ round(., 4)))
 
+gt(case3_table)
 ```
 
+**Simulation under different scenarios**
 
 ```{r}
+#| label: case3-icc-sim
+
 rep_size <- c(100, 1000, 10000)
 M <- c(3, 5, 10)
 sigma_E <- c(1, 3, 5)
@@ -750,8 +856,8 @@ case3_sim <-
     pars = list_transpose(list(sigma_S = sigma_S, theta_R = theta_R, sigma_E = sigma_E, M = M), simplify = FALSE),
     ICC_A1 = sigma_S^2 / (sigma_S^2 + theta_R^2 + sigma_E^2),
     ICC_Ak = sigma_S^2 / (sigma_S^2 + theta_R^2 / M + sigma_E^2 / M),
-    ICC_A1_fixed = (sigma_S^2 - theta_R^2 / (M-1)) / (sigma_S^2 + theta_R^2 + sigma_E^2),
-    ICC_Ak_fixed = sigma_S^2 / (sigma_S^2 + sigma_E^2 / M),
+    ICC_A1_corrected = (sigma_S^2 - theta_R^2 / (M-1)) / (sigma_S^2 + theta_R^2 + sigma_E^2),
+    ICC_Ak_corrected = sigma_S^2 / (sigma_S^2 + sigma_E^2 / M),
     ICC_C1 = sigma_S^2 / (sigma_S^2 + sigma_E^2),
     ICC_Ck = sigma_S^2 / (sigma_S^2 + sigma_E^2 / M), 
     icc_A1 = future_map2_dbl(
@@ -779,29 +885,38 @@ case3_sim <-
 ```
 
 
+Gray dotted line is the original ICC(A, 1) and blue dotted line is the corrected ICC(A, 1).
 
 ```{r}
+#| label: fig-case3-icc_a1
+#| fig-cap: "ICC(A, 1) for Case 3"
+ 
 case3_sim |> 
-  select(rep_size, M, sigma_E, sigma_SE_ratio, sigma_RE_ratio, ICC_A1, ICC_A1_fixed, icc_A1) |> 
+  select(rep_size, M, sigma_E, sigma_SE_ratio, sigma_RE_ratio, ICC_A1, ICC_A1_corrected, icc_A1) |> 
   filter(sigma_E == 1) |> 
   ggplot(aes(x = factor(rep_size), y = icc_A1)) +
   geom_point() + 
   geom_hline(aes(yintercept = ICC_A1), linetype = "dashed", color = "gray") +
-  geom_hline(aes(yintercept = ICC_A1_fixed), linetype = "dotted", color = "blue") +
+  geom_hline(aes(yintercept = ICC_A1_corrected), linetype = "dotted", color = "blue") +
   facet_grid(sigma_SE_ratio ~ M + sigma_RE_ratio, 
              labeller = label_bquote(rows = sigma[S]/sigma[E] == .(sigma_SE_ratio),
                                      cols = atop(paste("M =", .(M)), 
                                                  paste(theta[R]/sigma[E], "=", .(sigma_RE_ratio)))))
 ```
 
+Gray dotted line is the original ICC(A, k) and blue dotted line is the corrected ICC(A, k) = ICC(C, k).
+
 ```{r}
+#| label: fig-case3-icc_ak
+#| fig-cap: "ICC(A, k) for Case 3"
+ 
 case3_sim |> 
-  select(rep_size, M, sigma_E, sigma_SE_ratio, sigma_RE_ratio, ICC_Ak, ICC_Ak_fixed, icc_Ak) |> 
+  select(rep_size, M, sigma_E, sigma_SE_ratio, sigma_RE_ratio, ICC_Ak, ICC_Ak_corrected, icc_Ak) |> 
   filter(sigma_E == 1) |> 
   ggplot(aes(x = factor(rep_size), y = icc_Ak)) +
   geom_point() + 
   geom_hline(aes(yintercept = ICC_Ak), linetype = "dashed", color = "gray") +
-  geom_hline(aes(yintercept = ICC_Ak_fixed), linetype = "dotted", color = "blue") +
+  geom_hline(aes(yintercept = ICC_Ak_corrected), linetype = "dotted", color = "blue") +
 
   facet_grid(sigma_SE_ratio ~ M + sigma_RE_ratio, 
              labeller = label_bquote(rows = sigma[S]/sigma[E] == .(sigma_SE_ratio),
@@ -811,6 +926,9 @@ case3_sim |>
 
 
 ```{r}
+#| label: fig-case3-icc_c1
+#| fig-cap: "ICC(C, 1) for Case 3"
+ 
 case3_sim |> 
   select(rep_size, M, sigma_E, sigma_SE_ratio, sigma_RE_ratio, ICC_C1, icc_C1) |> 
   filter(sigma_E == 1) |> 
@@ -824,6 +942,9 @@ case3_sim |>
 ```
 
 ```{r}
+#| label: fig-case3-icc_ck
+#| fig-cap: "ICC(C, k) for Case 3"
+ 
 case3_sim |> 
   select(rep_size, M, sigma_E, sigma_SE_ratio, sigma_RE_ratio, ICC_Ck, icc_Ck) |> 
   filter(sigma_E == 1) |> 
@@ -840,48 +961,69 @@ case3_sim |>
 
 ## Case 4: Three-way Rater(Person(Cluster)) ANOVA Design
 
-Subject: $i = 1, \dots, N$, Raters: $j = 1, \dots, M$ and Clusters: $k = 1, \dots, C$. Subjects are nested within clusters, and raters are crossed with subjects.
+Subject: $i = 1, \dots, N$, Raters: $j = 1, \dots, M$ and Clusters: $k = 1, \dots, O$. Raters are newted within subjects, and subjects are nested within clusters.
 
 $$
-y_{j(i(k))} = \mu + C_k + S(C)_{i(k)} + \epsilon_{j(i(k))}
+Y_{j(i(k))} = \mu + C_k + S(C)_{i(k)} + E_{j(i(k))}
 $$
 
+where
 
+- $C_k \sim N(0, \sigma_C^2)$
+- $S(C)_{i(k)} \sim N(0, \sigma_S^2)$
+- $E_{j(i(k))} \sim N(0, \sigma_E^2)$
+
+The ICC formulas:
+
+![Reliability coefficients (ICCs) for Case 4 [Table retrived from @lin2025]](figures/ICC_case4.png)
+
+**Simply check the ICC calculations**
 
 ```{r}
+#| label: tab-case4-icc
+#| tab-cap: "Reliability coefficients (ICCs) for Case 4"
+ 
+# settings
 N <- 4
 M <- 3
 sigma_C <- 2
 sigma_S <- 3
 sigma_E <- 4
 
-ICC_1_S <- sigma_S^2 / (sigma_S^2 + sigma_E^2)
-ICC_k_S <- sigma_S^2 / (sigma_S^2 + sigma_E^2 / M)
-ICC_1_Cman <- sigma_C^2 / (sigma_C^2 + sigma_S^2 + sigma_E^2)
-ICC_k_Cman <- sigma_C^2 / (sigma_C^2 + sigma_S^2 / N + sigma_E^2 / (N*M))
-ICC_1_Clat <- sigma_C^2 / (sigma_C^2 + sigma_E^2)
-ICC_k_Clat <- sigma_C^2 / (sigma_C^2 + sigma_E^2 / (N*M))
-
 pars_case4 = list(mu = 2, sigma_C = sigma_C, sigma_S = sigma_S, sigma_E = sigma_E, N = N, M = M)
 
-ICC_1_S
-icc_cor(pars = pars_case4, model = "threeway-nested", unit = "single", level = "subject", rep_size = 10000)
-ICC_k_S
-icc_cor(pars = pars_case4, model = "threeway-nested", unit = "average", level = "subject", rep_size = 100000)
-ICC_1_Cman
-icc_cor(pars = pars_case4, model = "threeway-nested", unit = "single", level = "cluster", clus_score_form = "manifest", rep_size = 100000)
-ICC_k_Cman
-icc_cor(pars = pars_case4, model = "threeway-nested", unit = "average", level = "cluster", clus_score_form = "manifest", rep_size = 100000)
-ICC_1_Clat
-icc_cor(pars = pars_case4, model = "threeway-nested", unit = "single", level = "cluster", clus_score_form = "latent", rep_size = 100000)
-ICC_k_Clat
-icc_cor(pars = pars_case4, model = "threeway-nested", unit = "average", level = "cluster", clus_score_form = "latent", rep_size = 100000)
+# results
+case4_table <- tibble(
+  Reliability = c("$\\rho^{S}(1)$", "$\\rho^{S}(M)$", "$\\rho^{Cman}(1, 1)$", "$\\rho^{Cman}(N, M)$", "$\\rho^{Clat}(1,1)$", "$\\rho^{Clat}(N, M)$"),
+  Setting = c(
+    sigma_S^2 / (sigma_S^2 + sigma_E^2),
+    sigma_S^2 / (sigma_S^2 + sigma_E^2 / M),
+    sigma_C^2 / (sigma_C^2 + sigma_S^2 + sigma_E^2),
+    sigma_C^2 / (sigma_C^2 + sigma_S^2 / N + sigma_E^2 / (N*M)),
+    sigma_C^2 / (sigma_C^2 + sigma_E^2),
+    sigma_C^2 / (sigma_C^2 + sigma_E^2 / (N*M))
+  ),
+  Simulation = c(
+    icc_cor(pars = pars_case4, model = "threeway-nested", unit = "single", level = "subject", rep_size = 10000),
+    icc_cor(pars = pars_case4, model = "threeway-nested", unit = "average", level = "cluster", clus_score_form = "latent", rep_size = 100000),
+    icc_cor(pars = pars_case4, model = "threeway-nested", unit = "single", level = "cluster", clus_score_form = "manifest", rep_size = 100000),
+    icc_cor(pars = pars_case4, model = "threeway-nested", unit = "average", level = "cluster", clus_score_form = "manifest", rep_size = 100000),
+    icc_cor(pars = pars_case4, model = "threeway-nested", unit = "single", level = "cluster", clus_score_form = "latent", rep_size = 100000),
+    icc_cor(pars = pars_case4, model = "threeway-nested", unit = "average", level = "cluster", clus_score_form = "latent", rep_size = 100000)
+  )
+) |> 
+  mutate(across(where(is.numeric), ~ round(., 4)))
+
+gt(case4_table) |> 
+  fmt_markdown()
 
 ```
 
-
+**Simulation under different scenarios**
 
 ```{r}
+#| label: case4-icc-sim
+  
 rep_size <- c(100, 1000, 10000)
 N <- c(2, 4, 6)
 M <- c(3, 4, 5)
@@ -943,6 +1085,9 @@ case4_sim <-
 
 
 ```{r}
+#| label: fig-case4-icc_1_s
+#| fig-cap: "$\rho^{S}(1)$ for Case 4"
+ 
 case4_sim |> 
   select(rep_size, N, M, sigma_E, sigma_SE_ratio, sigma_CE_ratio, ICC_1_S, icc_1_S) |> 
   ggplot(aes(x = factor(rep_size), y = icc_1_S)) +
@@ -958,6 +1103,9 @@ case4_sim |>
 
 
 ```{r}
+#| label: fig-case4-icc_k_s
+#| fig-cap: "$\rho^{S}(M)$ for Case 4" 
+
 case4_sim |> 
   select(rep_size, N, M, sigma_E, sigma_SE_ratio, sigma_CE_ratio, ICC_k_S, icc_k_S) |> 
   ggplot(aes(x = factor(rep_size), y = icc_k_S)) +
@@ -974,6 +1122,9 @@ case4_sim |>
 
 
 ```{r}
+#| label: fig-case4-icc_1_cman
+#| fig-cap: "$\rho^{Cman}(1)$ for Case 4"
+
 case4_sim |> 
   select(rep_size, N, M, sigma_E, sigma_SE_ratio, sigma_CE_ratio, ICC_1_Cman, icc_1_Cman) |> 
   ggplot(aes(x = factor(rep_size), y = icc_1_Cman)) +
@@ -988,6 +1139,9 @@ case4_sim |>
 ```
 
 ```{r}
+#| label: fig-case4-icc_k_cman
+#| fig-cap: "$\rho^{Cman}(N, M)$ for Case 4"
+ 
 case4_sim |> 
   select(rep_size, N, M, sigma_E, sigma_SE_ratio, sigma_CE_ratio, ICC_k_Cman, icc_k_Cman) |> 
   ggplot(aes(x = factor(rep_size), y = icc_k_Cman)) +
@@ -1002,6 +1156,9 @@ case4_sim |>
 ```
 
 ```{r}
+#| label: fig-case4-icc_1_clat
+#| fig-cap: "$\rho^{Clat}(1)$ for Case 4"
+ 
 case4_sim |> 
   select(rep_size, N, M, sigma_E, sigma_SE_ratio, sigma_CE_ratio, ICC_1_Clat, icc_1_Clat) |> 
   ggplot(aes(x = factor(rep_size), y = icc_1_Clat)) +
@@ -1016,6 +1173,9 @@ case4_sim |>
 ```
 
 ```{r}
+#| label: fig-case4-icc_k_clat
+#| fig-cap: "$\rho^{Clat}(N, M)$ for Case 4"
+ 
 case4_sim |> 
   select(rep_size, N, M, sigma_E, sigma_SE_ratio, sigma_CE_ratio, ICC_k_Clat, icc_k_Clat) |> 
   ggplot(aes(x = factor(rep_size), y = icc_k_Clat)) +
@@ -1032,14 +1192,30 @@ case4_sim |>
 
 ## Case 5: Person(Cluster) x Rater ANOVA Design
 
+Subject: $i = 1, \dots, N$, Raters: $j = 1, \dots, M$ and Clusters: $k = 1, \dots, O$. Subjects are nested within clusters, and raters are crossed with subjects and cluster.
+
 $$
-Y_{i(k)j} = \mu + C_k + S_{i(k)} + R_j + (C \times R)_{kj} + E_{i(k)j}
+Y_{i(k)j} = \mu + C_k + S(C)_{i(k)} + R_j + (C \times R)_{kj} + E_{i(k)j}
 $$
 
+where
+
+- $C_k \sim N(0, \sigma_C^2)$
+- $S(C)_{i(k)} \sim N(0, \sigma_S^2)$
+- $R_j \sim N(0, \sigma_R^2)$
+- $(C \times R)_{kj} \sim N(0, \sigma_{CR}^2)$
+- $E_{i(k)j} \sim N(0, \sigma_E^2)$
 
 There are up to 12 ICCs in this design ...
+![Reliability coefficients (ICCs) for Case 5 [Table retrived from @lin2025]](figures/ICC_case5.png)
+
+**Simply check the ICC calculations**
 
 ```{r}
+#| label: tab-case5-icc
+#| tab-cap: "Reliability coefficients (ICCs) for Case 5"
+ 
+# settings 
 N <- 4
 M <- 3
 sigma_C <- 2
@@ -1050,34 +1226,40 @@ sigma_E <- 5
 
 pars_case5 = list(mu = 2, sigma_C = sigma_C, sigma_S = sigma_S, sigma_R = sigma_R, sigma_CR = sigma_CR, sigma_E = sigma_E, N = N, M = M)
 
-(ICC_A1_S <- sigma_S^2 / (sigma_S^2 + sigma_R^2 + sigma_CR^2 + sigma_E^2))
-icc_cor(pars = pars_case5, model = "threeway-nestcrossed", type = "agreement", unit = "single", level = "subject", rep_size = 100000)
-(ICC_Ak_S <- sigma_S^2 / (sigma_S^2 + sigma_R^2 / M + sigma_CR^2 / M + sigma_E^2 / M))
-icc_cor(pars = pars_case5, model = "threeway-nestcrossed", type = "agreement", unit = "average", level = "subject", rep_size = 100000)
+# results
+case5_table <- tibble(
+  Reliability = c("$\\rho_{abs}^{S}(1)$", "$\\rho_{abs}^{S}(M)$", "$\\rho_{rel}^{S}(1)$", "$\\rho_{rel}^{S}(M)$", "$\\rho_{abs}^{Cman}(1, 1)$", "$\\rho_{abs}^{Cman}(N, M)$", "$\\rho_{rel}^{Cman}(1, 1)$", "$\\rho_{rel}^{Cman}(N, M)$", "$\\rho_{abs}^{Clat}(1,1)$", "$\\rho_{abs}^{Clat}(N, M)$", "$\\rho_{rel}^{Clat}(1,1)$", "$\\rho_{rel}^{Clat}(N, M)$"),
+  Setting = c(
+    sigma_S^2 / (sigma_S^2 + sigma_R^2 + sigma_CR^2 + sigma_E^2),
+    sigma_S^2 / (sigma_S^2 + sigma_R^2 / M + sigma_CR^2 / M + sigma_E^2 / M),
+    sigma_S^2 / (sigma_S^2 + sigma_E^2),
+    sigma_S^2 / (sigma_S^2 + sigma_E^2 / M),
+    sigma_C^2 / (sigma_C^2 + sigma_S^2 + sigma_R^2 + sigma_CR^2 + sigma_E^2),
+    sigma_C^2 / (sigma_C^2 + sigma_S^2 / N + sigma_R^2 / M + sigma_CR^2 / M + sigma_E^2 / (N * M)),
+    sigma_C^2 / (sigma_C^2 + sigma_S^2 + sigma_CR^2 + sigma_E^2),
+    sigma_C^2 / (sigma_C^2 + sigma_S^2 / N + sigma_CR^2 / M + sigma_E^2 / (N * M)),
+    sigma_C^2 / (sigma_C^2 + sigma_R^2 + sigma_CR^2 + sigma_E^2),
+    sigma_C^2 / (sigma_C^2 + sigma_R^2 / M + sigma_CR^2 / M + sigma_E^2 / (N * M)),
+    sigma_C^2 / (sigma_C^2 + sigma_CR^2 + sigma_E^2),
+    sigma_C^2 / (sigma_C^2 + sigma_CR^2 / M + sigma_E^2 / (N * M))
+  ),
+  Simulation = c(
+    icc_cor(pars = pars_case5, model = "threeway-nestcrossed", type = "agreement", unit = "single", level = "subject", rep_size = 100000),
+    icc_cor(pars = pars_case5, model = "threeway-nestcrossed", type = "agreement", unit = "average", level = "subject", rep_size = 100000),
+    icc_cor(pars = pars_case5, model = "threeway-nestcrossed", type = "consistency", unit = "single", level = "subject", rep_size = 100000),
+    icc_cor(pars = pars_case5, model = "threeway-nestcrossed", type = "consistency", unit = "average", level = "subject", rep_size = 100000),
+    icc_cor(pars = pars_case5, model = "threeway-nestcrossed", type = "agreement", unit = "single", level = "cluster", clus_score_form = "manifest", rep_size = 100000),
+    icc_cor(pars = pars_case5, model = "threeway-nestcrossed", type = "agreement", unit = "average", level = "cluster", clus_score_form = "manifest", rep_size = 100000),
+    icc_cor(pars = pars_case5, model = "threeway-nestcrossed", type = "consistency", unit = "single", level = "cluster", clus_score_form = "manifest", rep_size = 100000),
+    icc_cor(pars = pars_case5, model = "threeway-nestcrossed", type = "consistency", unit = "average", level = "cluster", clus_score_form = "manifest", rep_size = 100000),
+    icc_cor(pars = pars_case5, model = "threeway-nestcrossed", type = "agreement", unit = "single", level = "cluster", clus_score_form = "latent", rep_size = 100000),
+    icc_cor(pars = pars_case5, model = "threeway-nestcrossed", type = "agreement", unit = "average", level = "cluster", clus_score_form = "latent", rep_size = 100000),
+    icc_cor(pars = pars_case5, model = "threeway-nestcrossed", type = "consistency", unit = "single", level = "cluster", clus_score_form = "latent", rep_size = 100000),
+    icc_cor(pars = pars_case5, model = "threeway-nestcrossed", type = "consistency", unit = "average", level = "cluster", clus_score_form = "latent", rep_size = 100000)
+  )
+) |> 
+  mutate(across(where(is.numeric), ~ round(., 4)))
 
-(ICC_C1_S <- sigma_S^2 / (sigma_S^2 + sigma_E^2))
-icc_cor(pars = pars_case5, model = "threeway-nestcrossed", type = "consistency", unit = "single", level = "subject", rep_size = 100000)
-(ICC_Ck_S <- sigma_S^2 / (sigma_S^2 + sigma_E^2 / M))
-icc_cor(pars = pars_case5, model = "threeway-nestcrossed", type = "consistency", unit = "average", level = "subject", rep_size = 100000)
-
-(ICC_A1_Cman <- sigma_C^2 / (sigma_C^2 + sigma_S^2 + sigma_R^2 + sigma_CR^2 + sigma_E^2))
-icc_cor(pars = pars_case5, model = "threeway-nestcrossed", type = "agreement", unit = "single", level = "cluster", clus_score_form = "manifest", rep_size = 100000)
-(ICC_Ak_Cman <- sigma_C^2 / (sigma_C^2 + sigma_S^2 / N + sigma_R^2 / M + sigma_CR^2 / M + sigma_E^2 / (N*M)))
-icc_cor(pars = pars_case5, model = "threeway-nestcrossed", type = "agreement", unit = "average", level = "cluster", clus_score_form = "manifest", rep_size = 100000)
-
-(ICC_C1_Cman <- sigma_C^2 / (sigma_C^2 + sigma_S^2 + sigma_CR^2 + sigma_E^2))
-icc_cor(pars = pars_case5, model = "threeway-nestcrossed", type = "consistency", unit = "single", level = "cluster", clus_score_form = "manifest", rep_size = 100000)
-(ICC_Ck_Cman <- sigma_C^2 / (sigma_C^2 + sigma_S^2 / N + sigma_CR^2 / M + sigma_E^2 / (N*M)))
-icc_cor(pars = pars_case5, model = "threeway-nestcrossed", type = "consistency", unit = "average", level = "cluster", clus_score_form = "manifest", rep_size = 100000)
-
-(ICC_A1_Clat <- sigma_C^2 / (sigma_C^2 + sigma_R^2 + sigma_CR^2 + sigma_E^2))
-icc_cor(pars = pars_case5, model = "threeway-nestcrossed", type = "agreement", unit = "single", level = "cluster", clus_score_form = "latent", rep_size = 100000)
-(ICC_Ak_Clat <- sigma_C^2 / (sigma_C^2 + sigma_R^2 / M + sigma_CR^2 / M + sigma_E^2 / (N*M)))
-icc_cor(pars = pars_case5, model = "threeway-nestcrossed", type = "agreement", unit = "average", level = "cluster", clus_score_form = "latent", rep_size = 100000)
-
-(ICC_C1_Clat <- sigma_C^2 / (sigma_C^2 + sigma_CR^2 + sigma_E^2))
-icc_cor(pars = pars_case5, model = "threeway-nestcrossed", type = "consistency", unit = "single", level = "cluster", clus_score_form = "latent", rep_size = 100000)
-(ICC_Ck_Clat <- sigma_C^2 / (sigma_C^2 + sigma_CR^2 / M + sigma_E^2 / (N*M)))
-icc_cor(pars = pars_case5, model = "threeway-nestcrossed", type = "consistency", unit = "average", level = "cluster", clus_score_form = "latent", rep_size = 100000)
-
+gt(case5_table) |> 
+  fmt_markdown()
 ```
